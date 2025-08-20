@@ -1,245 +1,372 @@
 //
 //  SquirrelInputController.swift
-//  Squirrel
+//  Squirrel（松鼠输入法）
 //
 //  Created by Leo Liu on 5/7/24.
 //
 
+// 引入输入法框架，这是 macOS 系统提供的输入法开发工具包
+// 就像是拿到了"输入法开发许可证"，可以合法地开发输入法程序
 import InputMethodKit
 
+// 定义输入法控制器类，这是整个输入法的"大脑"
+// final 表示这个类不能被其他类继承，就像一个"最终版本"的设计，不能再修改
 final class SquirrelInputController: IMKInputController {
+  // 定义组合按键的最大数量，就像一个人最多只能同时按下几个键
+  // 50 是一个足够大的数字，正常人不可能同时按下这么多键
   private static let keyRollOver = 50
+  
+  // 记录未知应用程序的数量，用来给无法识别的应用程序起名字
+  // 就像是给不认识的人编号："未知应用1"、"未知应用2"等
   private static var unknownAppCnt: UInt = 0
 
+  // 当前正在使用输入法的应用程序客户端
+  // weak 表示如果应用程序关闭了，这个引用就会自动清空，避免内存泄漏
   private weak var client: IMKTextInput?
+  
+  // 获取 Rime 输入法引擎的接口，就像拿到工具箱一样，里面有很多工具可以用
   private let rimeAPI: RimeApi_stdbool = rime_get_api_stdbool().pointee
+  
+  // 当前正在编辑的文本（拼音输入时显示的字母）
+  // 比如输入"ni hao"时，这里就会存储"ni hao"
   private var preedit: String = ""
+  
+  // 当前选中的文本范围，比如用鼠标拖动选中的文字
+  // .empty 表示没有选中任何文字
   private var selRange: NSRange = .empty
+  
+  // 光标的位置，就是闪烁的竖线在哪里
   private var caretPos: Int = 0
+  
+  // 记录上一次的修饰键状态（Shift、Command、Option等）
+  // 用来检测哪些键被按下或释放了
   private var lastModifiers: NSEvent.ModifierFlags = .init()
+  
+  // 当前输入法会话的ID，就像每次聊天的房间号
+  // 0 表示没有活跃的会话
   private var session: RimeSessionId = 0
+  
+  // 当前使用的输入方案ID，比如"拼音"、"五笔"、"仓颉"等
   private var schemaId: String = ""
+  
+  // 是否在应用程序内直接显示编辑文本（不弹出候选框）
+  // 比如在微信里输入时，直接在输入框显示拼音
   private var inlinePreedit = false
+  
+  // 是否在应用程序内直接显示候选词
+  // 比如在微信里输入时，直接在输入框下方显示候选词
   private var inlineCandidate = false
-  // for chord-typing
+  
+  // 以下是组合按键功能的变量（同时按下多个键）
+  // 存储组合按键的按键编码数组
   private var chordKeyCodes: [UInt32] = .init(repeating: 0, count: SquirrelInputController.keyRollOver)
+  
+  // 存储组合按键的修饰键数组
   private var chordModifiers: [UInt32] = .init(repeating: 0, count: SquirrelInputController.keyRollOver)
+  
+  // 当前组合按键的数量
   private var chordKeyCount: Int = 0
+  
+  // 组合按键的定时器，用来检测按键释放
   private var chordTimer: Timer?
+  
+  // 组合按键的时间间隔，多久算同时按下
   private var chordDuration: TimeInterval = 0
+  
+  // 当前正在使用输入法的应用程序名称
   private var currentApp: String = ""
 
+  // 这个警告告诉代码检查工具"我知道这个方法有点复杂，但是是必要的"
   // swiftlint:disable:next cyclomatic_complexity
+  
+  // 处理键盘输入的核心方法，就像输入法的"耳朵"，负责监听所有的按键
   override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
+    // 如果事件为空，直接返回 false
     guard let event = event else { return false }
+    
+    // 获取当前按下的修饰键（Shift、Command、Option等）
     let modifiers = event.modifierFlags
+    
+    // 计算与上一次相比，哪些修饰键的状态发生了变化
+    // 就是比较"上次按了什么键"和"这次按了什么键"
     let changes = lastModifiers.symmetricDifference(modifiers)
 
-    // Return true to indicate the the key input was received and dealt with.
-    // Key processing will not continue in that case.  In other words the
-    // system will not deliver a key down event to the application.
-    // Returning false means the original key down will be passed on to the client.
+    // handled 变量用来标记这个按键是否已经被输入法处理了
+    // true = 输入法已经处理了这个按键，不需要再传给应用程序
+    // false = 输入法没有处理，需要传给应用程序继续处理
     var handled = false
 
+    // 检查输入法会话是否正常，如果不正常就创建新的会话
     if session == 0 || !rimeAPI.find_session(session) {
       createSession()
       if session == 0 {
+        // 如果创建会话失败，返回 false 让应用程序处理按键
         return false
       }
     }
 
+    // 更新当前的应用程序客户端
     self.client ?= sender as? IMKTextInput
+    
+    // 如果切换到了新的应用程序，就更新应用程序选项
     if let app = client?.bundleIdentifier(), currentApp != app {
       currentApp = app
       updateAppOptions()
     }
 
+    // 根据事件类型来处理不同的情况
     switch event.type {
     case .flagsChanged:
+      // 处理修饰键变化（Shift、Command、Option等）
       if lastModifiers == modifiers {
         handled = true
         break
       }
-      // print("[DEBUG] FLAGSCHANGED client: \(sender ?? "nil"), modifiers: \(modifiers)")
+      
+      // 将 macOS 的修饰键转换成 Rime 能理解的格式
       var rimeModifiers: UInt32 = SquirrelKeycode.osxModifiersToRime(modifiers: modifiers)
-      // For flags-changed event, keyCode is available since macOS 10.15
-      // (#715)
+      
+      // 对于修饰键变化事件，从 macOS 10.15 开始才有 keyCode
       let rimeKeycode: UInt32 = SquirrelKeycode.osxKeycodeToRime(keycode: event.keyCode, keychar: nil, shift: false, caps: false)
 
+      // 特殊处理大写锁定键
       if changes.contains(.capsLock) {
-        // NOTE: rime assumes XK_Caps_Lock to be sent before modifier changes,
-        // while NSFlagsChanged event has the flag changed already.
-        // so it is necessary to revert kLockMask.
+        // 注意：Rime 要求在修饰键变化之前发送 XK_Caps_Lock，
+        // 但 NSFlagsChanged 事件已经包含了变化后的标志。
+        // 所以需要反转 kLockMask。
         rimeModifiers ^= kLockMask.rawValue
         _ = processKey(rimeKeycode, modifiers: rimeModifiers)
       }
 
-      // Need to process release before modifier down. Because
-      // sometimes release event is delayed to next modifier keydown.
+      // 需要先处理按键释放，再处理按键按下。
+      // 因为有时候释放事件会延迟到下一个按键按下时。
       var buffer = [(keycode: UInt32, modifier: UInt32)]()
       for flag in [NSEvent.ModifierFlags.shift, .control, .option, .command] where changes.contains(flag) {
-        if modifiers.contains(flag) { // New modifier
+        if modifiers.contains(flag) { // 新按下的修饰键
           buffer.append((keycode: rimeKeycode, modifier: rimeModifiers))
-        } else { // Release
+        } else { // 释放的修饰键
           buffer.insert((keycode: rimeKeycode, modifier: rimeModifiers | kReleaseMask.rawValue), at: 0)
         }
       }
+      // 处理所有缓冲的按键事件
       for (keycode, modifier) in buffer {
         _ = processKey(keycode, modifiers: modifier)
       }
 
+      // 更新上次的修饰键状态，并刷新界面
       lastModifiers = modifiers
       rimeUpdate()
 
     case .keyDown:
-      // ignore Command+X hotkeys.
-      if modifiers.contains(.command) {
-        break
-      }
+      // 处理普通按键按下事件
+      // 忽略 Command+X 快捷键（已注释掉）
+       if modifiers.contains(.command) {
+         break
+       }
 
+      // 获取按键的编码和字符
       let keyCode = event.keyCode
       var keyChars = event.charactersIgnoringModifiers
+      
+      // 处理大小写相关的字符
       let capitalModifiers = modifiers.isSubset(of: [.shift, .capsLock])
       if let code = keyChars?.first,
          (capitalModifiers && !code.isLetter) || (!capitalModifiers && !code.isASCII) {
         keyChars = event.characters
       }
-      // print("[DEBUG] KEYDOWN client: \(sender ?? "nil"), modifiers: \(modifiers), keyCode: \(keyCode), keyChars: [\(keyChars ?? "empty")]")
 
-      // translate osx keyevents to rime keyevents
+      // 将 macOS 的按键事件转换成 Rime 的按键事件
       if let char = keyChars?.first {
         let rimeKeycode = SquirrelKeycode.osxKeycodeToRime(keycode: keyCode, keychar: char,
                                                            shift: modifiers.contains(.shift),
                                                            caps: modifiers.contains(.capsLock))
         if rimeKeycode != 0 {
           let rimeModifiers = SquirrelKeycode.osxModifiersToRime(modifiers: modifiers)
+          // 处理按键并更新界面
           handled = processKey(rimeKeycode, modifiers: rimeModifiers)
           rimeUpdate()
         }
       }
 
     default:
+      // 其他类型的事件不处理
       break
     }
 
+    // 返回处理结果
     return handled
   }
 
-  func selectCandidate(_ index: Int) -> Bool {
+  // 选择候选词的方法
+// index: 候选词的序号（0=第一个，1=第二个，以此类推）
+func selectCandidate(_ index: Int) -> Bool {
+    // 让 Rime 引擎选择指定序号的候选词
     let success = rimeAPI.select_candidate_on_current_page(session, index)
     if success {
+      // 如果选择成功，更新界面显示
       rimeUpdate()
     }
     return success
   }
 
+  // 翻页方法，用来显示上一页或下一页的候选词
   // swiftlint:disable:next identifier_name
   func page(up: Bool) -> Bool {
     var handled = false
+    // 让 Rime 引擎翻页，up=true 表示向上翻（上一页），up=false 表示向下翻（下一页）
     handled = rimeAPI.change_page(session, up)
     if handled {
+      // 如果翻页成功，更新界面显示
       rimeUpdate()
     }
     return handled
   }
 
+  // 移动光标位置的方法
+  // forward: true=向前移动（左移），false=向后移动（右移）
   func moveCaret(forward: Bool) -> Bool {
+    // 获取当前光标位置
     let currentCaretPos = rimeAPI.get_caret_pos(session)
+    // 获取当前输入的文本
     guard let input = rimeAPI.get_input(session) else { return false }
+    
     if forward {
+      // 向前移动光标（左移）
       if currentCaretPos <= 0 {
-        return false
+        return false  // 已经到最左边了，不能再移动
       }
       rimeAPI.set_caret_pos(session, currentCaretPos - 1)
     } else {
+      // 向后移动光标（右移）
       let inputStr = String(cString: input)
       if currentCaretPos >= inputStr.utf8.count {
-        return false
+        return false  // 已经到最右边了，不能再移动
       }
       rimeAPI.set_caret_pos(session, currentCaretPos + 1)
     }
+    // 更新界面显示
     rimeUpdate()
     return true
   }
 
-  override func recognizedEvents(_ sender: Any!) -> Int {
-    // print("[DEBUG] recognizedEvents:")
+  // 告诉系统我们需要处理哪些类型的事件
+override func recognizedEvents(_ sender: Any!) -> Int {
+    // 返回我们需要处理的事件类型：按键按下和修饰键变化
     return Int(NSEvent.EventTypeMask.Element(arrayLiteral: .keyDown, .flagsChanged).rawValue)
   }
 
+  // 激活输入法服务器时的处理方法
+  // 当用户切换到这个输入法时会调用这个方法
   override func activateServer(_ sender: Any!) {
+    // 更新当前的应用程序客户端
     self.client ?= sender as? IMKTextInput
-    // print("[DEBUG] activateServer:")
+    
+    // 获取键盘布局配置
     var keyboardLayout = NSApp.squirrelAppDelegate.config?.getString("keyboard_layout") ?? ""
     if keyboardLayout == "last" || keyboardLayout == "" {
+      // 如果设置为"last"或空，使用系统默认的键盘布局
       keyboardLayout = ""
     } else if keyboardLayout == "default" {
+      // 如果设置为"default"，使用 ABC 键盘布局
       keyboardLayout = "com.apple.keylayout.ABC"
     } else if !keyboardLayout.hasPrefix("com.apple.keylayout.") {
+      // 如果不是完整的键盘布局名称，添加前缀
       keyboardLayout = "com.apple.keylayout.\(keyboardLayout)"
     }
+    // 如果指定了键盘布局，就应用它
     if keyboardLayout != "" {
       client?.overrideKeyboard(withKeyboardNamed: keyboardLayout)
     }
+    // 清空正在编辑的文本
     preedit = ""
   }
 
-  override init!(server: IMKServer!, delegate: Any!, client: Any!) {
+  // 初始化方法，当输入法控制器被创建时调用
+override init!(server: IMKServer!, delegate: Any!, client: Any!) {
+    // 记录当前的应用程序客户端
     self.client = client as? IMKTextInput
-    // print("[DEBUG] initWithServer: \(server ?? .init()) delegate: \(delegate ?? "nil") client:\(client ?? "nil")")
+    
+    // 调用父类的初始化方法
     super.init(server: server, delegate: delegate, client: client)
+    
+    // 创建输入法会话
     createSession()
   }
 
+  // 停用输入法服务器时的处理方法
+  // 当用户切换到其他输入法时会调用这个方法
   override func deactivateServer(_ sender: Any!) {
-    // print("[DEBUG] deactivateServer: \(sender ?? "nil")")
+    // 隐藏输入法界面（候选词窗口等）
     hidePalettes()
+    
+    // 提交当前正在编辑的文本
     commitComposition(sender)
+    
+    // 清空应用程序客户端引用
     client = nil
   }
 
-  override func hidePalettes() {
+  // 隐藏输入法界面
+override func hidePalettes() {
+    // 隐藏候选词窗口
     NSApp.squirrelAppDelegate.panel?.hide()
+    
+    // 调用父类的隐藏方法
     super.hidePalettes()
   }
 
   /*!
    @method
-   @abstract   Called when a user action was taken that ends an input session.
-   Typically triggered by the user selecting a new input method
-   or keyboard layout.
-   @discussion When this method is called your controller should send the
-   current input buffer to the client via a call to
-   insertText:replacementRange:.  Additionally, this is the time
-   to clean up if that is necessary.
+   @abstract   当用户操作结束输入会话时调用。
+   通常由用户选择新的输入法或键盘布局触发。
+   @discussion 当调用此方法时，控制器应该通过调用
+   insertText:replacementRange: 将当前输入缓冲区发送到客户端。
+   此外，这是清理的时机。
    */
   override func commitComposition(_ sender: Any!) {
+    // 更新当前的应用程序客户端
     self.client ?= sender as? IMKTextInput
-    // print("[DEBUG] commitComposition: \(sender ?? "nil")")
-    //  commit raw input
+    
+    // 提交原始输入的文本
     if session != 0 {
       if let input = rimeAPI.get_input(session) {
+        // 将输入的文本提交到应用程序
         commit(string: String(cString: input))
+        // 清空 Rime 引擎中的编辑状态
         rimeAPI.clear_composition(session)
       }
     }
   }
 
-  override func menu() -> NSMenu! {
+  // 创建输入法菜单的方法
+// 当用户在菜单栏点击输入法图标时会显示这个菜单
+override func menu() -> NSMenu! {
+    // 创建"部署"菜单项（重新编译配置文件）
     let deploy = NSMenuItem(title: NSLocalizedString("Deploy", comment: "Menu item"), action: #selector(deploy), keyEquivalent: "`")
     deploy.target = self
     deploy.keyEquivalentModifierMask = [.control, .option]
+    
+    // 创建"同步用户数据"菜单项
     let sync = NSMenuItem(title: NSLocalizedString("Sync user data", comment: "Menu item"), action: #selector(syncUserData), keyEquivalent: "")
     sync.target = self
+    
+    // 创建"日志"菜单项
     let logDir = NSMenuItem(title: NSLocalizedString("Logs...", comment: "Menu item"), action: #selector(openLogFolder), keyEquivalent: "")
     logDir.target = self
+    
+    // 创建"设置"菜单项
     let setting = NSMenuItem(title: NSLocalizedString("Settings...", comment: "Menu item"), action: #selector(openRimeFolder), keyEquivalent: "")
     setting.target = self
+    
+    // 创建"Rime Wiki"菜单项
     let wiki = NSMenuItem(title: NSLocalizedString("Rime Wiki...", comment: "Menu item"), action: #selector(openWiki), keyEquivalent: "")
     wiki.target = self
+    
+    // 创建"检查更新"菜单项
     let update = NSMenuItem(title: NSLocalizedString("Check for updates...", comment: "Menu item"), action: #selector(checkForUpdates), keyEquivalent: "")
     update.target = self
 
+    // 创建菜单并添加所有菜单项
     let menu = NSMenu()
     menu.addItem(deploy)
     menu.addItem(sync)
@@ -251,42 +378,57 @@ final class SquirrelInputController: IMKInputController {
     return menu
   }
 
-  @objc func deploy() {
+  // 菜单项动作方法
+
+// 部署配置文件（重新编译）
+@objc func deploy() {
     NSApp.squirrelAppDelegate.deploy()
   }
 
-  @objc func syncUserData() {
+// 同步用户数据
+@objc func syncUserData() {
     NSApp.squirrelAppDelegate.syncUserData()
   }
 
-  @objc func openLogFolder() {
+// 打开日志文件夹
+@objc func openLogFolder() {
     NSApp.squirrelAppDelegate.openLogFolder()
   }
 
-  @objc func openRimeFolder() {
+// 打开 Rime 配置文件夹
+@objc func openRimeFolder() {
     NSApp.squirrelAppDelegate.openRimeFolder()
   }
 
-  @objc func checkForUpdates() {
+// 检查更新
+@objc func checkForUpdates() {
     NSApp.squirrelAppDelegate.checkForUpdates()
   }
 
-  @objc func openWiki() {
+// 打开 Rime Wiki 页面
+@objc func openWiki() {
     NSApp.squirrelAppDelegate.openWiki()
   }
 
-  deinit {
+// 析构方法，当输入法控制器被销毁时调用
+// 就像是打扫房间，在搬走之前把一切都收拾干净
+deinit {
+    // 销毁输入法会话
     destroySession()
   }
 }
 
+// 私有扩展，包含内部使用的方法
+// 就像是家庭的内部事务，外部不需要知道
 private extension SquirrelInputController {
 
+  // 组合按键定时器触发时的处理方法
+  // 当同时按下多个键时，如果超过了设定的时间，就会触发这个方法
   func onChordTimer(_: Timer) {
-    // chord release triggered by timer
+    // 由定时器触发的组合按键释放处理
     var processedKeys = false
     if chordKeyCount > 0 && session != 0 {
-      // simulate key-ups
+      // 模拟按键释放事件
       for i in 0..<chordKeyCount {
         let handled = rimeAPI.process_key(session, Int32(chordKeyCodes[i]), Int32(chordModifiers[i] | kReleaseMask.rawValue))
         if handled {
@@ -294,65 +436,101 @@ private extension SquirrelInputController {
         }
       }
     }
+    // 清空组合按键状态
     clearChord()
     if processedKeys {
+      // 如果处理了按键，更新界面显示
       rimeUpdate()
     }
   }
 
-  func updateChord(keycode: UInt32, modifiers: UInt32) {
-    // print("[DEBUG] update chord: {\(chordKeyCodes)} << \(keycode)")
+  // 更新组合按键状态的方法
+// 当用户按下新的键时，会调用这个方法来更新组合按键的记录
+func updateChord(keycode: UInt32, modifiers: UInt32) {
+    // 检查这个按键是否已经在组合按键中了
     for i in 0..<chordKeyCount where chordKeyCodes[i] == keycode {
-      return
+      return  // 如果已经在组合中，就不需要重复添加
     }
+    
+    // 检查组合按键数量是否超过限制
     if chordKeyCount >= Self.keyRollOver {
-      // you are cheating. only one human typist (fingers <= 10) is supported.
+      // 你在作弊！只支持一个人类打字员（手指 <= 10）。
       return
     }
+    
+    // 将新的按键添加到组合按键中
     chordKeyCodes[chordKeyCount] = keycode
     chordModifiers[chordKeyCount] = modifiers
     chordKeyCount += 1
-    // reset timer
+    
+    // 重置定时器
     if let timer = chordTimer, timer.isValid {
-      timer.invalidate()
+      timer.invalidate()  // 停止之前的定时器
     }
-    chordDuration = 0.1
+    
+    // 设置组合按键的时间间隔
+    chordDuration = 0.1  // 默认 0.1 秒
     if let duration = NSApp.squirrelAppDelegate.config?.getDouble("chord_duration"), duration > 0 {
-      chordDuration = duration
+      chordDuration = duration  // 使用配置文件中的设置
     }
+    
+    // 创建新的定时器
     chordTimer = Timer.scheduledTimer(withTimeInterval: chordDuration, repeats: false, block: onChordTimer)
   }
 
-  func clearChord() {
+  // 清空组合按键状态的方法
+// 当组合按键结束或者需要取消时调用这个方法
+func clearChord() {
+    // 清空组合按键数量
     chordKeyCount = 0
+    
+    // 停止并清空定时器
     if let timer = chordTimer {
       if timer.isValid {
-        timer.invalidate()
+        timer.invalidate()  // 停止定时器
       }
-      chordTimer = nil
+      chordTimer = nil  // 清空定时器引用
     }
   }
 
-  func createSession() {
+  // 创建输入法会话的方法
+// 每个应用程序使用输入法时都会创建一个独立的会话
+func createSession() {
+    // 获取应用程序的标识符，如果获取不到就生成一个未知应用的名称
     let app = client?.bundleIdentifier() ?? {
       SquirrelInputController.unknownAppCnt &+= 1
       return "UnknownApp\(SquirrelInputController.unknownAppCnt)"
     }()
+    
+    // 打印调试信息
     print("createSession: \(app)")
+    
+    // 记录当前应用程序名称
     currentApp = app
+    
+    // 创建 Rime 输入法会话
     session = rimeAPI.create_session()
+    
+    // 清空当前输入方案ID
     schemaId = ""
 
+    // 如果会话创建成功，更新应用程序选项
     if session != 0 {
       updateAppOptions()
     }
   }
 
-  func updateAppOptions() {
+  // 更新应用程序选项的方法
+// 根据不同的应用程序应用不同的设置
+func updateAppOptions() {
+    // 如果没有当前应用程序，就不需要更新
     if currentApp == "" {
       return
     }
+    
+    // 获取当前应用程序的选项设置
     if let appOptions = NSApp.squirrelAppDelegate.config?.getAppOptions(currentApp) {
+      // 遍历所有选项并应用到 Rime 引擎
       for (key, value) in appOptions {
         print("set app option: \(key) = \(value)")
         rimeAPI.set_option(session, key, value)
@@ -360,52 +538,63 @@ private extension SquirrelInputController {
     }
   }
 
-  func destroySession() {
-    // print("[DEBUG] destroySession:")
+  // 销毁输入法会话的方法
+  // 当应用程序关闭或切换输入法时调用
+func destroySession() {
+    // 如果存在活跃的会话，就销毁它
     if session != 0 {
       _ = rimeAPI.destroy_session(session)
-      session = 0
+      session = 0  // 重置会话ID
     }
+    
+    // 清空组合按键状态
     clearChord()
   }
 
-  func processKey(_ rimeKeycode: UInt32, modifiers rimeModifiers: UInt32) -> Bool {
-    // TODO add special key event preprocessing here
+  // 处理按键的核心方法
+// 将按键信息发送给 Rime 引擎进行处理
+func processKey(_ rimeKeycode: UInt32, modifiers rimeModifiers: UInt32) -> Bool {
+    // TODO: 在这里添加特殊按键事件的预处理
 
-    // with linear candidate list, arrow keys may behave differently.
+    // 对于线性候选词列表，方向键的行为可能不同。
     if let panel = NSApp.squirrelAppDelegate.panel {
       if panel.linear != rimeAPI.get_option(session, "_linear") {
         rimeAPI.set_option(session, "_linear", panel.linear)
       }
-      // with vertical text, arrow keys may behave differently.
+      // 对于垂直文本，方向键的行为可能不同。
       if panel.vertical != rimeAPI.get_option(session, "_vertical") {
         rimeAPI.set_option(session, "_vertical", panel.vertical)
       }
     }
 
+    // 让 Rime 引擎处理按键
     let handled = rimeAPI.process_key(session, Int32(rimeKeycode), Int32(rimeModifiers))
-    // print("[DEBUG] rime_keycode: \(rimeKeycode), rime_modifiers: \(rimeModifiers), handled = \(handled)")
 
-    // TODO add special key event postprocessing here
+    // TODO: 在这里添加特殊按键事件的后处理
 
+    // 如果 Rime 引擎没有处理这个按键，就进行特殊处理
     if !handled {
+      // 检查是否是 Vim 编辑器的命令模式切换按键
       let isVimBackInCommandMode = rimeKeycode == XK_Escape || ((rimeModifiers & kControlMask.rawValue != 0) && (rimeKeycode == XK_c || rimeKeycode == XK_C || rimeKeycode == XK_bracketleft))
       if isVimBackInCommandMode && rimeAPI.get_option(session, "vim_mode") &&
           !rimeAPI.get_option(session, "ascii_mode") {
+        // 在类 Vim 编辑器的命令模式下关闭中文模式
         rimeAPI.set_option(session, "ascii_mode", true)
-        // print("[DEBUG] turned Chinese mode off in vim-like editor's command mode")
       }
     } else {
+      // 如果 Rime 引擎处理了按键，检查是否需要处理组合按键
       let isChordingKey = switch Int32(rimeKeycode) {
       case XK_space...XK_asciitilde, XK_Control_L, XK_Control_R, XK_Alt_L, XK_Alt_R, XK_Shift_L, XK_Shift_R:
-        true
+        true  // 这些键可以参与组合按键
       default:
-        false
+        false  // 其他键不参与组合按键
       }
+      
+      // 如果启用了组合按键功能且当前按键可以参与组合
       if isChordingKey && rimeAPI.get_option(session, "_chord_typing") {
         updateChord(keycode: rimeKeycode, modifiers: rimeModifiers)
       } else if (rimeModifiers & kReleaseMask.rawValue) == 0 {
-        // non-chording key pressed
+        // 如果不是组合按键，就清空组合按键状态
         clearChord()
       }
     }
@@ -413,12 +602,19 @@ private extension SquirrelInputController {
     return handled
   }
 
-  func rimeConsumeCommittedText() {
+  // 消耗已提交文本的方法
+// 从 Rime 引擎获取已经确认要输入的文本，并提交到应用程序
+func rimeConsumeCommittedText() {
+    // 创建一个提交文本的结构体
     var commitText = RimeCommit.rimeStructInit()
+    
+    // 从 Rime 引擎获取提交的文本
     if rimeAPI.get_commit(session, &commitText) {
       if let text = commitText.text {
+        // 将文本提交到应用程序
         commit(string: String(cString: text))
       }
+      // 释放提交文本结构体的内存
       _ = rimeAPI.free_commit(&commitText)
     }
   }
@@ -457,48 +653,23 @@ private extension SquirrelInputController {
 
       if inlineCandidate {
         var candidatePreview = ctx.commit_text_preview.map { String(cString: $0) } ?? ""
-        let endOfCandidatePreview = candidatePreview.endIndex
         if inlinePreedit {
-          // 左移光標後的情形：
-          // preedit:             ^已選某些字[xiang zuo yi dong]|guangbiao$
-          // commit_text_preview: ^已選某些字向左移動$
-          // candidate_preview:   ^已選某些字[向左移動]|guangbiao$
-          // 繼續翻頁至指定更短字詞的情形：
-          // preedit:             ^已選某些字[xiang zuo]yidong|guangbiao$
-          // commit_text_preview: ^已選某些字向左yidong$
-          // candidate_preview:   ^已選某些字[向左]yidong|guangbiao$
-          // 光標移至當前段落最左端的情形：
-          // preedit:             ^已選某些字|[xiang zuo yi dong guang biao]$
-          // commit_text_preview: ^已選某些字向左移動光標$
-          // candidate_preview:   ^已選某些字|[向左移動光標]$
-          // 討論：
-          // preedit 與 commit_text_preview 中“已選某些字”部分一致
-          // 因此，選中範圍即正在翻譯的碼段“向左移動”中，兩者的 start 值一致
-          // 光標位置的範圍是 start ..= endOfCandidatePreview
           if caretPos >= end && caretPos < preedit.endIndex {
-            // 從 preedit 截取光標後未翻譯的編碼“guangbiao”
             candidatePreview += preedit[caretPos...]
           }
+          show(preedit: candidatePreview,
+               selRange: NSRange(location: start.utf16Offset(in: candidatePreview), length: candidatePreview.utf16.distance(from: start, to: candidatePreview.endIndex)),
+               caretPos: candidatePreview.utf16.count - max(0, preedit.utf16.distance(from: caretPos, to: preedit.endIndex)))
         } else {
-          // 翻頁至指定更短字詞的情形：
-          // preedit:             ^已選某些字[xiang zuo]yidong|guangbiao$
-          // commit_text_preview: ^已選某些字向左yidongguangbiao$
-          // candidate_preview:   ^已選某些字[向左???]|$
-          // 光標移至當前段落最左端，繼續翻頁至指定更短字詞的情形：
-          // preedit:             ^已選某些字|[xiang zuo]yidongguangbiao$
-          // commit_text_preview: ^已選某些字向左yidongguangbiao$
-          // candidate_preview:   ^已選某些字|[向左]???$
-          // FIXME: add librime APIs to support preview candidate without remaining code.
+          if end < caretPos && start < caretPos {
+            candidatePreview = String(candidatePreview[..<candidatePreview.index(candidatePreview.endIndex, offsetBy: -max(0, preedit.distance(from: end, to: caretPos)))])
+          } else if end < preedit.endIndex && caretPos <= start {
+            candidatePreview = String(candidatePreview[..<candidatePreview.index(candidatePreview.endIndex, offsetBy: -max(0, preedit.distance(from: end, to: preedit.endIndex)))])
+          }
+          show(preedit: candidatePreview,
+               selRange: NSRange(location: start.utf16Offset(in: candidatePreview), length: candidatePreview.utf16.distance(from: start, to: candidatePreview.endIndex)),
+               caretPos: candidatePreview.utf16.count)
         }
-        // preedit can contain additional prompt text before start:
-        // ^(prompt)[selection]$
-        let start = min(start, candidatePreview.endIndex)
-        // caret can be either before or after the selected range.
-        let caretPos = caretPos <= start ? caretPos : endOfCandidatePreview
-        show(preedit: candidatePreview,
-             selRange: NSRange(location: start.utf16Offset(in: candidatePreview),
-                               length: candidatePreview.utf16.distance(from: start, to: candidatePreview.endIndex)),
-             caretPos: caretPos.utf16Offset(in: candidatePreview))
       } else {
         if inlinePreedit {
           show(preedit: preedit, selRange: NSRange(location: start.utf16Offset(in: preedit), length: preedit.utf16.distance(from: start, to: end)), caretPos: caretPos.utf16Offset(in: preedit))
