@@ -8,7 +8,6 @@
 // 引入输入法框架，这是 macOS 系统提供的输入法开发工具包
 // 就像是拿到了"输入法开发许可证"，可以合法地开发输入法程序
 import InputMethodKit
-import Carbon
 
 // 定义输入法控制器类，这是整个输入法的"大脑"
 // final 表示这个类不能被其他类继承，就像一个"最终版本"的设计，不能再修改
@@ -115,45 +114,8 @@ final class SquirrelInputController: IMKInputController {
       updateAppOptions()
     }
 
-    // 检查是否是我们需要特殊处理的全局快捷键
-    func isGlobalHotkey(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> Bool {
-      // 仅允许 Option 且排除 Command/Control，允许 Fn；去掉无关位
-      let mods = modifiers.intersection(.deviceIndependentFlagsMask)
-      guard mods.contains(.option), !mods.contains(.command), !mods.contains(.control) else { return false }
-
-      // Alt + F9..F19 作为“冷门热键”
-      switch keyCode {
-      case UInt16(kVK_F9), UInt16(kVK_F10), UInt16(kVK_F11), UInt16(kVK_F12),
-           UInt16(kVK_F13), UInt16(kVK_F14), UInt16(kVK_F15), UInt16(kVK_F16),
-           UInt16(kVK_F17), UInt16(kVK_F18), UInt16(kVK_F19):
-        return true
-      default:
-        return false
-      }
-    }
-
     // 根据事件类型来处理不同的情况
     switch event.type {
-    case .keyDown where isGlobalHotkey(keyCode: event.keyCode, modifiers: modifiers):
-      // 处理全局快捷键（Alt+F9-F12），即使在非输入状态也要响应
-      print("Global hotkey detected: keyCode=\(event.keyCode), modifiers=\(modifiers)")
-      
-      let rimeKeycode = SquirrelKeycode.osxKeycodeToRime(keycode: event.keyCode, keychar: nil, 
-                                                         shift: modifiers.contains(.shift),
-                                                         caps: modifiers.contains(.capsLock))
-      let rimeModifiers = SquirrelKeycode.osxModifiersToRime(modifiers: modifiers)
-      
-      // 直接传递给 Rime 引擎，让 Lua 脚本处理
-      if rimeKeycode != 0 {
-        handled = processKey(rimeKeycode, modifiers: rimeModifiers)
-        rimeUpdate()
-        print("Global hotkey sent to Rime: rimeKeycode=\(rimeKeycode), rimeModifiers=\(rimeModifiers), handled=\(handled)")
-      } else {
-        // 未映射的键，放行避免吞掉系统/应用快捷键
-        print("Global hotkey unmapped, letting system handle: keyCode=\(event.keyCode)")
-        handled = false
-      }
-    
     case .flagsChanged:
       // 处理修饰键变化（Shift、Command、Option等）
       if lastModifiers == modifiers {
@@ -197,14 +159,18 @@ final class SquirrelInputController: IMKInputController {
 
     case .keyDown:
       // 处理普通按键按下事件
-      // 忽略 Command 组合键快捷键，让系统自己处理
-      if modifiers.contains(.command) {
-        break
-      }
+      // 忽略 Command+X 快捷键（已注释掉）
+       if modifiers.contains(.command) {
+         break
+       }
 
       // 获取按键的编码和字符
       let keyCode = event.keyCode
       var keyChars = event.charactersIgnoringModifiers
+      
+      // 打印按键编码和字符值
+      print("keyCode: \(keyCode), keyChars: \(keyChars ?? "nil")")
+      
       
       // 处理大小写相关的字符
       let capitalModifiers = modifiers.isSubset(of: [.shift, .capsLock])
@@ -214,17 +180,18 @@ final class SquirrelInputController: IMKInputController {
       }
 
       // 将 macOS 的按键事件转换成 Rime 的按键事件
-      if let char = keyChars?.first {
-        let rimeKeycode = SquirrelKeycode.osxKeycodeToRime(keycode: keyCode, keychar: char,
+//       if let char = keyChars?.first {
+      let char = keyChars?.first
+      let rimeKeycode = SquirrelKeycode.osxKeycodeToRime(keycode: keyCode, keychar: char,
                                                            shift: modifiers.contains(.shift),
                                                            caps: modifiers.contains(.capsLock))
-        if rimeKeycode != 0 {
+      if rimeKeycode != 0 {
           let rimeModifiers = SquirrelKeycode.osxModifiersToRime(modifiers: modifiers)
           // 处理按键并更新界面
           handled = processKey(rimeKeycode, modifiers: rimeModifiers)
           rimeUpdate()
         }
-      }
+//       }
 
     default:
       // 其他类型的事件不处理
@@ -565,17 +532,10 @@ func updateAppOptions() {
     if currentApp == "" {
       return
     }
-
-    // 设置当前应用程序信息到 Rime 属性中
-    rimeAPI.set_property(session, "client_app", currentApp)
-    print("set app property: client_app = \(currentApp)")
     
-    // 如果有应用程序的显示名称，也设置进去
-    if let appName = Bundle(identifier: currentApp)?.localizedInfoDictionary?["CFBundleDisplayName"] as? String ??
-                     Bundle(identifier: currentApp)?.infoDictionary?["CFBundleName"] as? String {
-      rimeAPI.set_property(session, "client_app_name", appName)
-      print("set app property: client_app_name = \(appName)")
-    }
+    // 将当前应用程序信息保存到 Rime 属性中
+    // 这样 Rime 引擎就能知道当前正在使用输入法的是哪个应用程序
+    rimeAPI.set_property(session, "client_app", currentApp)
     
     // 获取当前应用程序的选项设置
     if let appOptions = NSApp.squirrelAppDelegate.config?.getAppOptions(currentApp) {
@@ -669,183 +629,268 @@ func rimeConsumeCommittedText() {
   }
 
   // swiftlint:disable:next cyclomatic_complexity
-  // 这是一个重要的更新函数，就像是一个总指挥，负责把用户输入的拼音变成候选字
+  // 更新输入法界面显示的方法
+  // 这是输入法的"画面更新器"，负责刷新用户看到的所有内容
   func rimeUpdate() {
-    // print("[DEBUG] rimeUpdate")  // 这行是用来调试的，程序员可以看到这里是否被执行了
-    rimeConsumeCommittedText()  // 先处理已经确认输入的文字，就像清空购物车里已付款的商品
+    // print("[DEBUG] rimeUpdate")
+    // 首先处理用户已经确认要输入的文字（就像按了空格键确认某个候选词）
+    rimeConsumeCommittedText()
 
-    // 创建一个状态检查器，用来查看输入法的当前状态
-    var status = RimeStatus_stdbool.rimeStructInit()  // 初始化一个状态结构体，就像准备一个表格来记录信息
-    
-    // 如果成功获取到输入法的状态信息
+    // 创建一个状态结构体，用来存储输入法的当前状态信息
+    // 就像是给输入法做个"体检报告"，看看现在是什么状态
+    var status = RimeStatus_stdbool.rimeStructInit()
+    // 从 Rime 引擎获取当前的状态信息
     if rimeAPI.get_status(session, &status) {
-      // 根据不同的输入方案（如拼音、五笔）来调整界面风格
-      // swiftlint:disable:next identifier_name  // 告诉代码检查工具忽略下一行的命名规则
+      // 启用特定输入方案的界面样式
+      // 比如拼音输入法和五笔输入法可能有不同的界面风格
+      // swiftlint:disable:next identifier_name
+      // 检查当前使用的输入方案是否发生了变化
+      // schema_id 就是输入方案的身份证号，比如"拼音"、"五笔"等
+      // 检查当前使用的输入方案是否发生了变化
+      // schema_id 就是输入方案的身份证号，比如"拼音"、"五笔"等
       if let schema_id = status.schema_id, schemaId == "" || schemaId != String(cString: schema_id) {
-        // 如果输入方案ID为空或者与当前方案不同，就需要更新方案
-        schemaId = String(cString: schema_id)  // 记录新的输入方案ID
-        NSApp.squirrelAppDelegate.loadSettings(for: schemaId)  // 加载这个方案的设置
-        
-        // 设置行内编辑（在文本行中直接显示候选字）
-        if let panel = NSApp.squirrelAppDelegate.panel {  // 如果存在输入面板
-          // 决定是否启用行内编辑功能：如果面板支持且设置中没有禁用，或者设置中明确启用
+        // 更新当前的输入方案ID，就像更换输入法的"工作模式"
+        schemaId = String(cString: schema_id)
+        // 加载对应输入方案的界面设置，就像换个主题皮肤
+        NSApp.squirrelAppDelegate.loadSettings(for: schemaId)
+        // 设置内联编辑模式（inline preedit）
+        // 内联模式：直接在应用程序的输入框里显示拼音，而不是单独弹窗
+        if let panel = NSApp.squirrelAppDelegate.panel {
+          // 判断是否使用内联编辑模式
+          // 就像选择"在微信输入框里直接显示拼音" 还是 "弹出独立的输入窗口"
           inlinePreedit = (panel.inlinePreedit && !rimeAPI.get_option(session, "no_inline")) || rimeAPI.get_option(session, "inline")
-          // 决定是否启用行内候选字功能：如果面板支持且设置中没有禁用
+          // 判断是否使用内联候选词模式
+          // 就像选择"在输入框下方直接显示候选词" 还是 "弹出候选词窗口"
           inlineCandidate = panel.inlineCandidate && !rimeAPI.get_option(session, "no_inline")
-          // 如果不是行内编辑模式，就在输入字符串中嵌入软光标（闪烁的光标）
+          // 如果不是内联模式，就在编辑文本中嵌入软光标
+          // 软光标：一个虚拟的光标标记，告诉用户当前编辑位置
           rimeAPI.set_option(session, "soft_cursor", !inlinePreedit)
         }
       }
-      _ = rimeAPI.free_status(&status)  // 释放状态信息占用的内存，就像清理用完的表格
+      // 释放状态结构体占用的内存，就像用完餐具要洗干净收起来
+      _ = rimeAPI.free_status(&status)
     }
 
-    // 创建一个上下文对象，用来获取当前输入的详细信息
-    var ctx = RimeContext_stdbool.rimeStructInit()  // 初始化上下文结构体
-    
-    // 如果成功获取到输入上下文
+    // 创建一个上下文结构体，用来获取当前输入的详细信息
+    // 上下文就像是拍了一张"输入状态的快照"，包含正在输入的内容、候选词等
+    var ctx = RimeContext_stdbool.rimeStructInit()
+    // 从 Rime 引擎获取当前的输入上下文
     if rimeAPI.get_context(session, &ctx) {
-      // 更新正在输入的文本（比如你正在输入的拼音）
-      let preedit = ctx.composition.preedit.map({ String(cString: $0) }) ?? ""  // 获取当前输入的拼音
+      // 更新预编辑文本（preedit text）
+      // 预编辑文本就是用户正在输入但还没确认的文字，比如输入"nihao"时显示的拼音
+      let preedit = ctx.composition.preedit.map({ String(cString: $0) }) ?? ""
 
-      // 计算文本中几个重要位置：开始位置、结束位置和光标位置
-      // 这就像是在一篇文章中标记出重要的段落位置
+      // 计算选中文本的开始位置
       let start = String.Index(preedit.utf8.index(preedit.utf8.startIndex, offsetBy: Int(ctx.composition.sel_start)), within: preedit) ?? preedit.startIndex
+      // 计算选中文本的结束位置
       let end = String.Index(preedit.utf8.index(preedit.utf8.startIndex, offsetBy: Int(ctx.composition.sel_end)), within: preedit) ?? preedit.startIndex
+      // 计算光标的当前位置
       let caretPos = String.Index(preedit.utf8.index(preedit.utf8.startIndex, offsetBy: Int(ctx.composition.cursor_pos)), within: preedit) ?? preedit.startIndex
 
-      // 如果启用了行内候选字功能
+      // 判断是否使用内联候选词模式
+      // 内联候选词：直接在输入框附近显示候选词，而不是弹出独立窗口
       if inlineCandidate {
-        // 获取候选字的预览文本
+        // 获取候选词的预览文本
+        // 这是用户可能会选择的文字，比如输入"ni"时显示"你"、"尼"等
         var candidatePreview = ctx.commit_text_preview.map { String(cString: $0) } ?? ""
-        
-        // 如果启用了行内编辑
+        // 如果同时使用内联预编辑模式
         if inlinePreedit {
-          // 如果光标在结束位置之后，且不在文本末尾
+          // 如果光标位置在选中区域之后且还没到文本末尾
+          // 就把光标后面的文字也加到候选词预览中
           if caretPos >= end && caretPos < preedit.endIndex {
-            // 将光标后面的文本添加到候选字预览中
             candidatePreview += preedit[caretPos...]
           }
-          // 显示候选字预览，并设置选中区域和光标位置
+          // 显示预编辑文本，包含候选词预览
+          // 这一步会在输入框中显示完整的预览内容
           show(preedit: candidatePreview,
                selRange: NSRange(location: start.utf16Offset(in: candidatePreview), length: candidatePreview.utf16.distance(from: start, to: candidatePreview.endIndex)),
                caretPos: candidatePreview.utf16.count - max(0, preedit.utf16.distance(from: caretPos, to: preedit.endIndex)))
         } else {
-          // 如果没有启用行内编辑，需要调整候选字预览的显示
+          // 如果不使用内联预编辑模式，需要调整候选词预览的显示范围
+          // 这里的逻辑是为了正确显示选中的部分和未选中的部分
           if end < caretPos && start < caretPos {
-            // 如果结束位置在光标前，且开始位置也在光标前
+            // 截取候选词预览的一部分，避免显示重复内容
             candidatePreview = String(candidatePreview[..<candidatePreview.index(candidatePreview.endIndex, offsetBy: -max(0, preedit.distance(from: end, to: caretPos)))])
           } else if end < preedit.endIndex && caretPos <= start {
-            // 如果结束位置不在文本末尾，且光标在开始位置前
+            // 另一种情况下的截取逻辑
             candidatePreview = String(candidatePreview[..<candidatePreview.index(candidatePreview.endIndex, offsetBy: -max(0, preedit.distance(from: end, to: preedit.endIndex)))])
           }
-          // 显示调整后的候选字预览
+          // 显示调整后的候选词预览
           show(preedit: candidatePreview,
                selRange: NSRange(location: start.utf16Offset(in: candidatePreview), length: candidatePreview.utf16.distance(from: start, to: candidatePreview.endIndex)),
                caretPos: candidatePreview.utf16.count)
         }
       } else {
-        // 如果没有启用行内候选字功能
+        // 如果不使用内联候选词模式，直接显示预编辑文本
         if inlinePreedit {
-          // 如果启用了行内编辑，直接显示输入的文本
+          // 使用内联预编辑模式：直接在输入框中显示拼音和选中状态
           show(preedit: preedit, selRange: NSRange(location: start.utf16Offset(in: preedit), length: preedit.utf16.distance(from: start, to: end)), caretPos: caretPos.utf16Offset(in: preedit))
         } else {
-          // 这是一个巧妙的技巧：显示一个非空字符串来防止终端（iTerm2）回显输入的每个字符
-          // 注意这里使用的是全角空格（U+3000）；如果使用半角字符如"..."
-          // 在输入中文字符时会导致基线不稳定（文字上下跳动）
+          // 小技巧：显示一个非空字符串来防止 iTerm2（终端应用）回显每个字符
+          // 注意这里使用的是全角空格 U+3000（中文输入中的空格）
+          // 使用半角字符如"..."会导致中文字符编写时基线不稳定
           show(preedit: preedit.isEmpty ? "" : "　", selRange: NSRange(location: 0, length: 0), caretPos: 0)
         }
       }
 
       // 更新候选词列表
+      // 候选词就是输入法为用户提供的选择项，比如输入"ni"时显示"你"、"尼"、"逆"等
       let numCandidates = Int(ctx.menu.num_candidates)  // 获取候选词的数量
-      var candidates = [String]()  // 创建一个数组来存储候选词
-      var comments = [String]()   // 创建一个数组来存储候选词的注释
-      
-      // 遍历所有候选词，将它们添加到数组中
+      var candidates = [String]()  // 创建存储候选词文本的数组
+      var comments = [String]()    // 创建存储候选词注释的数组（比如拼音、词性等提示信息）
+      // 遍历所有候选词，把它们从底层数据结构转换成 Swift 字符串
       for i in 0..<numCandidates {
-        let candidate = ctx.menu.candidates[i]  // 获取第i个候选词
-        candidates.append(candidate.text.map { String(cString: $0) } ?? "")  // 添加候选词文本
-        comments.append(candidate.comment.map { String(cString: $0) } ?? "")  // 添加候选词注释
+        let candidate = ctx.menu.candidates[i]  // 获取第 i 个候选词
+        // 添加候选词的主要文本（比如"你好"）
+        candidates.append(candidate.text.map { String(cString: $0) } ?? "")
+        // 添加候选词的注释信息（比如"nǐ hǎo"这样的拼音标注）
+        comments.append(candidate.comment.map { String(cString: $0) } ?? "")
       }
-      
-      var labels = [String]()  // 创建一个数组来存储候选词的标签（如1、2、3或a、b、c）
-      
-      // 设置候选词的选择标签
-      // swiftlint:disable identifier_name  // 告诉代码检查工具忽略命名规则
+      // 创建候选词标签数组，标签就是候选词前面的数字或字母（如 1、2、3 或 a、b、c）
+      var labels = [String]()
+      // swiftlint:disable identifier_name
+      // 检查是否有自定义的选择键（比如用 asdf 代替 1234 来选择候选词）
       if let select_keys = ctx.menu.select_keys {
-        // 如果设置了选择键（如asdf或1234），将它们转换为标签
+        // 将选择键字符串转换为单个字符的数组
+        // 比如 "1234567890" 变成 ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
         labels = String(cString: select_keys).map { String($0) }
       } else if let select_labels = ctx.select_labels {
-        // 如果设置了选择标签，使用它们
+        // 如果没有选择键，使用预定义的标签
         let pageSize = Int(ctx.menu.page_size)  // 获取每页显示的候选词数量
+        // 遍历每页的标签，添加到标签数组中
         for i in 0..<pageSize {
           labels.append(select_labels[i].map { String(cString: $0) } ?? "")
         }
       }
-      // swiftlint:enable identifier_name  // 恢复命名规则检查
-      
-      // 获取当前页码和是否是最后一页的信息
-      let page = Int(ctx.menu.page_no)  // 当前是第几页候选词
-      let lastPage = ctx.menu.is_last_page  // 是否是最后一页
+      // swiftlint:enable identifier_name
+      // 获取当前页码（从0开始计数，就像数组索引）
+      let page = Int(ctx.menu.page_no)
+      // 检查是否是最后一页（没有更多候选词了）
+      let lastPage = ctx.menu.is_last_page
 
-      // 计算选中区域的范围
+      // 计算选中范围，用于高亮显示用户选中的文本部分
       let selRange = NSRange(location: start.utf16Offset(in: preedit), length: preedit.utf16.distance(from: start, to: end))
-      
-      // 显示候选词面板
-      showPanel(preedit: inlinePreedit ? "" : preedit, selRange: selRange, caretPos: caretPos.utf16Offset(in: preedit),
-                candidates: candidates, comments: comments, labels: labels, highlighted: Int(ctx.menu.highlighted_candidate_index),
-                page: page, lastPage: lastPage)
-      
-      _ = rimeAPI.free_context(&ctx)  // 释放上下文占用的内存，就像清理用完的资料
+      // 显示候选词面板（就是弹出的候选词窗口）
+      // 这个函数会把所有的信息（预编辑文本、候选词、标签等）传递给界面来显示
+      showPanel(preedit: inlinePreedit ? "" : preedit,  // 如果是内联模式就不在面板显示预编辑文本
+                selRange: selRange,                      // 选中的文本范围
+                caretPos: caretPos.utf16Offset(in: preedit),  // 光标位置
+                candidates: candidates,                  // 候选词列表
+                comments: comments,                      // 候选词注释
+                labels: labels,                         // 候选词标签（1、2、3等）
+                highlighted: Int(ctx.menu.highlighted_candidate_index),  // 当前高亮的候选词索引
+                page: page,                             // 当前页码
+                lastPage: lastPage)                     // 是否最后一页
+      // 释放上下文结构体占用的内存，避免内存泄漏
+      _ = rimeAPI.free_context(&ctx)
     } else {
-      // 如果获取上下文失败，隐藏输入面板
+      // 如果无法获取上下文信息，就隐藏所有输入法界面
+      // 这通常发生在输入结束或出现错误时
       hidePalettes()
     }
   }
 
+  // 提交文本的方法
+  // 这是把用户最终确认的文字"送达"到应用程序的过程，就像按下回车键确认输入
   func commit(string: String) {
+    // 检查当前是否有活跃的应用程序客户端，如果没有就直接返回
     guard let client = client else { return }
-    // print("[DEBUG] commitString: \(string)")
+    // print("[DEBUG] commitString: \(string)")  // 调试信息（已注释）
+    // 将确认的文字插入到应用程序中，replacementRange: .empty 表示不替换现有文字，只是插入
+    // 就像在微信聊天框中输入文字一样，这一步让文字真正出现在聊天框里
     client.insertText(string, replacementRange: .empty)
+    // 清空预编辑文本，因为已经确认输入了
     preedit = ""
+    // 隐藏输入法界面（候选词窗口等），因为输入已经完成
     hidePalettes()
   }
 
+  // 显示预编辑文本的方法
+  // 这个函数负责在应用程序中显示正在输入但还没确认的文字（比如拼音）
   func show(preedit: String, selRange: NSRange, caretPos: Int) {
+    // 检查是否有活跃的应用程序客户端
     guard let client = client else { return }
-    // print("[DEBUG] showPreeditString: '\(preedit)'")
+    // print("[DEBUG] showPreeditString: '\(preedit)'")  // 调试信息（已注释）
+    
+    // 优化：如果要显示的内容和当前已经显示的完全相同，就不需要重复更新
+    // 就像如果电视屏幕上已经是这个画面了，就不需要重新刷新
     if self.preedit == preedit && self.caretPos == caretPos && self.selRange == selRange {
       return
     }
 
-    self.preedit = preedit
-    self.caretPos = caretPos
-    self.selRange = selRange
+    // 更新内部存储的状态
+    self.preedit = preedit      // 保存当前的预编辑文本
+    self.caretPos = caretPos    // 保存光标位置
+    self.selRange = selRange    // 保存选中范围
 
-    // print("[DEBUG] selRange.location = \(selRange.location), selRange.length = \(selRange.length); caretPos = \(caretPos)")
+    // print("[DEBUG] selRange.location = \(selRange.location), selRange.length = \(selRange.length); caretPos = \(caretPos)")  // 调试信息（已注释）
+    
+    // 获取选中文本的起始位置
     let start = selRange.location
+    // 创建一个可修改的属性字符串，用来设置文字的显示样式（如颜色、下划线等）
     let attrString = NSMutableAttributedString(string: preedit)
+    
+    // 如果选中区域不是从文本开头开始，就为开头部分设置"已转换"的样式
     if start > 0 {
+      // 获取"已转换文本"的显示属性（通常是灰色或有下划线）
       let attrs = mark(forStyle: kTSMHiliteConvertedText, at: NSRange(location: 0, length: start))! as! [NSAttributedString.Key: Any]
+      // 应用这些属性到文本的前半部分
       attrString.setAttributes(attrs, range: NSRange(location: 0, length: start))
     }
+    
+    // 为剩余部分（用户正在编辑的部分）设置"选中原始文本"的样式
     let remainingRange = NSRange(location: start, length: preedit.utf16.count - start)
+    // 获取"选中原始文本"的显示属性（通常有特殊背景色或边框）
     let attrs = mark(forStyle: kTSMHiliteSelectedRawText, at: remainingRange)! as! [NSAttributedString.Key: Any]
+    // 应用这些属性到文本的后半部分
     attrString.setAttributes(attrs, range: remainingRange)
-    client.setMarkedText(attrString, selectionRange: NSRange(location: caretPos, length: 0), replacementRange: .empty)
+    
+    // 将带有样式的文本设置为"标记文本"显示在应用程序中
+    // 标记文本就是告诉系统"这些文字还在编辑中，不是最终确认的"
+    client.setMarkedText(attrString, 
+                        selectionRange: NSRange(location: caretPos, length: 0),  // 设置光标位置
+                        replacementRange: .empty)  // 不替换现有文字
   }
 
   // swiftlint:disable:next function_parameter_count
-  func showPanel(preedit: String, selRange: NSRange, caretPos: Int, candidates: [String], comments: [String], labels: [String], highlighted: Int, page: Int, lastPage: Bool) {
-    // print("[DEBUG] showPanelWithPreedit:...:")
+  // 显示候选词面板的方法
+  // 这个函数负责显示输入法的候选词窗口，就像打开一个菜单让用户选择想要的词汇
+  func showPanel(preedit: String,           // 预编辑文本（正在输入的拼音等）
+                selRange: NSRange,          // 选中的文本范围
+                caretPos: Int,              // 光标位置
+                candidates: [String],       // 候选词列表（如"你"、"尼"、"逆"）
+                comments: [String],         // 候选词注释（如拼音标注）
+                labels: [String],           // 候选词标签（如1、2、3）
+                highlighted: Int,           // 当前高亮的候选词序号
+                page: Int,                  // 当前页码
+                lastPage: Bool) {           // 是否是最后一页
+    // print("[DEBUG] showPanelWithPreedit:...:")  // 调试信息（已注释）
+    
+    // 检查是否有活跃的应用程序客户端
     guard let client = client else { return }
+    
+    // 获取输入位置的矩形区域，用来确定候选词窗口应该显示在哪里
+    // 就像确定菜单应该弹出在鼠标点击位置附近
     var inputPos = NSRect()
     client.attributes(forCharacterIndex: 0, lineHeightRectangle: &inputPos)
+    
+    // 获取输入法的候选词面板并更新显示
     if let panel = NSApp.squirrelAppDelegate.panel {
+      // 设置面板显示位置（通常在输入框附近）
       panel.position = inputPos
+      // 设置面板的输入控制器引用，建立双向连接
       panel.inputController = self
-      panel.update(preedit: preedit, selRange: selRange, caretPos: caretPos, candidates: candidates, comments: comments, labels: labels,
-                   highlighted: highlighted, page: page, lastPage: lastPage, update: true)
+      // 更新面板显示的所有内容：预编辑文本、选中范围、光标位置、候选词等
+      panel.update(preedit: preedit,           // 要显示的预编辑文本
+                  selRange: selRange,          // 选中范围
+                  caretPos: caretPos,          // 光标位置
+                  candidates: candidates,       // 候选词数组
+                  comments: comments,          // 注释数组
+                  labels: labels,              // 标签数组
+                  highlighted: highlighted,     // 高亮的候选词
+                  page: page,                  // 当前页码
+                  lastPage: lastPage,          // 是否最后一页
+                  update: true)                // 强制更新标志
     }
   }
 }
