@@ -8,6 +8,7 @@
 // 引入输入法框架，这是 macOS 系统提供的输入法开发工具包
 // 就像是拿到了"输入法开发许可证"，可以合法地开发输入法程序
 import InputMethodKit
+import Carbon
 
 // 定义输入法控制器类，这是整个输入法的"大脑"
 // final 表示这个类不能被其他类继承，就像一个"最终版本"的设计，不能再修改
@@ -114,8 +115,45 @@ final class SquirrelInputController: IMKInputController {
       updateAppOptions()
     }
 
+    // 检查是否是我们需要特殊处理的全局快捷键
+    func isGlobalHotkey(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> Bool {
+      // 仅允许 Option 且排除 Command/Control，允许 Fn；去掉无关位
+      let mods = modifiers.intersection(.deviceIndependentFlagsMask)
+      guard mods.contains(.option), !mods.contains(.command), !mods.contains(.control) else { return false }
+
+      // Alt + F9..F19 作为“冷门热键”
+      switch keyCode {
+      case UInt16(kVK_F9), UInt16(kVK_F10), UInt16(kVK_F11), UInt16(kVK_F12),
+           UInt16(kVK_F13), UInt16(kVK_F14), UInt16(kVK_F15), UInt16(kVK_F16),
+           UInt16(kVK_F17), UInt16(kVK_F18), UInt16(kVK_F19):
+        return true
+      default:
+        return false
+      }
+    }
+
     // 根据事件类型来处理不同的情况
     switch event.type {
+    case .keyDown where isGlobalHotkey(keyCode: event.keyCode, modifiers: modifiers):
+      // 处理全局快捷键（Alt+F9-F12），即使在非输入状态也要响应
+      print("Global hotkey detected: keyCode=\(event.keyCode), modifiers=\(modifiers)")
+      
+      let rimeKeycode = SquirrelKeycode.osxKeycodeToRime(keycode: event.keyCode, keychar: nil, 
+                                                         shift: modifiers.contains(.shift),
+                                                         caps: modifiers.contains(.capsLock))
+      let rimeModifiers = SquirrelKeycode.osxModifiersToRime(modifiers: modifiers)
+      
+      // 直接传递给 Rime 引擎，让 Lua 脚本处理
+      if rimeKeycode != 0 {
+        handled = processKey(rimeKeycode, modifiers: rimeModifiers)
+        rimeUpdate()
+        print("Global hotkey sent to Rime: rimeKeycode=\(rimeKeycode), rimeModifiers=\(rimeModifiers), handled=\(handled)")
+      } else {
+        // 未映射的键，放行避免吞掉系统/应用快捷键
+        print("Global hotkey unmapped, letting system handle: keyCode=\(event.keyCode)")
+        handled = false
+      }
+    
     case .flagsChanged:
       // 处理修饰键变化（Shift、Command、Option等）
       if lastModifiers == modifiers {
@@ -159,10 +197,10 @@ final class SquirrelInputController: IMKInputController {
 
     case .keyDown:
       // 处理普通按键按下事件
-      // 忽略 Command+X 快捷键（已注释掉）
-       if modifiers.contains(.command) {
-         break
-       }
+      // 忽略 Command 组合键快捷键，让系统自己处理
+      if modifiers.contains(.command) {
+        break
+      }
 
       // 获取按键的编码和字符
       let keyCode = event.keyCode
@@ -527,6 +565,17 @@ func updateAppOptions() {
     if currentApp == "" {
       return
     }
+
+    // 设置当前应用程序信息到 Rime 属性中
+    rimeAPI.set_property(session, "client_app", currentApp)
+    print("set app property: client_app = \(currentApp)")
+    
+    // 如果有应用程序的显示名称，也设置进去
+    if let appName = Bundle(identifier: currentApp)?.localizedInfoDictionary?["CFBundleDisplayName"] as? String ??
+                     Bundle(identifier: currentApp)?.infoDictionary?["CFBundleName"] as? String {
+      rimeAPI.set_property(session, "client_app_name", appName)
+      print("set app property: client_app_name = \(appName)")
+    }
     
     // 获取当前应用程序的选项设置
     if let appOptions = NSApp.squirrelAppDelegate.config?.getAppOptions(currentApp) {
@@ -620,97 +669,136 @@ func rimeConsumeCommittedText() {
   }
 
   // swiftlint:disable:next cyclomatic_complexity
+  // 这是一个重要的更新函数，就像是一个总指挥，负责把用户输入的拼音变成候选字
   func rimeUpdate() {
-    // print("[DEBUG] rimeUpdate")
-    rimeConsumeCommittedText()
+    // print("[DEBUG] rimeUpdate")  // 这行是用来调试的，程序员可以看到这里是否被执行了
+    rimeConsumeCommittedText()  // 先处理已经确认输入的文字，就像清空购物车里已付款的商品
 
-    var status = RimeStatus_stdbool.rimeStructInit()
+    // 创建一个状态检查器，用来查看输入法的当前状态
+    var status = RimeStatus_stdbool.rimeStructInit()  // 初始化一个状态结构体，就像准备一个表格来记录信息
+    
+    // 如果成功获取到输入法的状态信息
     if rimeAPI.get_status(session, &status) {
-      // enable schema specific ui style
-      // swiftlint:disable:next identifier_name
+      // 根据不同的输入方案（如拼音、五笔）来调整界面风格
+      // swiftlint:disable:next identifier_name  // 告诉代码检查工具忽略下一行的命名规则
       if let schema_id = status.schema_id, schemaId == "" || schemaId != String(cString: schema_id) {
-        schemaId = String(cString: schema_id)
-        NSApp.squirrelAppDelegate.loadSettings(for: schemaId)
-        // inline preedit
-        if let panel = NSApp.squirrelAppDelegate.panel {
+        // 如果输入方案ID为空或者与当前方案不同，就需要更新方案
+        schemaId = String(cString: schema_id)  // 记录新的输入方案ID
+        NSApp.squirrelAppDelegate.loadSettings(for: schemaId)  // 加载这个方案的设置
+        
+        // 设置行内编辑（在文本行中直接显示候选字）
+        if let panel = NSApp.squirrelAppDelegate.panel {  // 如果存在输入面板
+          // 决定是否启用行内编辑功能：如果面板支持且设置中没有禁用，或者设置中明确启用
           inlinePreedit = (panel.inlinePreedit && !rimeAPI.get_option(session, "no_inline")) || rimeAPI.get_option(session, "inline")
+          // 决定是否启用行内候选字功能：如果面板支持且设置中没有禁用
           inlineCandidate = panel.inlineCandidate && !rimeAPI.get_option(session, "no_inline")
-          // if not inline, embed soft cursor in preedit string
+          // 如果不是行内编辑模式，就在输入字符串中嵌入软光标（闪烁的光标）
           rimeAPI.set_option(session, "soft_cursor", !inlinePreedit)
         }
       }
-      _ = rimeAPI.free_status(&status)
+      _ = rimeAPI.free_status(&status)  // 释放状态信息占用的内存，就像清理用完的表格
     }
 
-    var ctx = RimeContext_stdbool.rimeStructInit()
+    // 创建一个上下文对象，用来获取当前输入的详细信息
+    var ctx = RimeContext_stdbool.rimeStructInit()  // 初始化上下文结构体
+    
+    // 如果成功获取到输入上下文
     if rimeAPI.get_context(session, &ctx) {
-      // update preedit text
-      let preedit = ctx.composition.preedit.map({ String(cString: $0) }) ?? ""
+      // 更新正在输入的文本（比如你正在输入的拼音）
+      let preedit = ctx.composition.preedit.map({ String(cString: $0) }) ?? ""  // 获取当前输入的拼音
 
+      // 计算文本中几个重要位置：开始位置、结束位置和光标位置
+      // 这就像是在一篇文章中标记出重要的段落位置
       let start = String.Index(preedit.utf8.index(preedit.utf8.startIndex, offsetBy: Int(ctx.composition.sel_start)), within: preedit) ?? preedit.startIndex
       let end = String.Index(preedit.utf8.index(preedit.utf8.startIndex, offsetBy: Int(ctx.composition.sel_end)), within: preedit) ?? preedit.startIndex
       let caretPos = String.Index(preedit.utf8.index(preedit.utf8.startIndex, offsetBy: Int(ctx.composition.cursor_pos)), within: preedit) ?? preedit.startIndex
 
+      // 如果启用了行内候选字功能
       if inlineCandidate {
+        // 获取候选字的预览文本
         var candidatePreview = ctx.commit_text_preview.map { String(cString: $0) } ?? ""
+        
+        // 如果启用了行内编辑
         if inlinePreedit {
+          // 如果光标在结束位置之后，且不在文本末尾
           if caretPos >= end && caretPos < preedit.endIndex {
+            // 将光标后面的文本添加到候选字预览中
             candidatePreview += preedit[caretPos...]
           }
+          // 显示候选字预览，并设置选中区域和光标位置
           show(preedit: candidatePreview,
                selRange: NSRange(location: start.utf16Offset(in: candidatePreview), length: candidatePreview.utf16.distance(from: start, to: candidatePreview.endIndex)),
                caretPos: candidatePreview.utf16.count - max(0, preedit.utf16.distance(from: caretPos, to: preedit.endIndex)))
         } else {
+          // 如果没有启用行内编辑，需要调整候选字预览的显示
           if end < caretPos && start < caretPos {
+            // 如果结束位置在光标前，且开始位置也在光标前
             candidatePreview = String(candidatePreview[..<candidatePreview.index(candidatePreview.endIndex, offsetBy: -max(0, preedit.distance(from: end, to: caretPos)))])
           } else if end < preedit.endIndex && caretPos <= start {
+            // 如果结束位置不在文本末尾，且光标在开始位置前
             candidatePreview = String(candidatePreview[..<candidatePreview.index(candidatePreview.endIndex, offsetBy: -max(0, preedit.distance(from: end, to: preedit.endIndex)))])
           }
+          // 显示调整后的候选字预览
           show(preedit: candidatePreview,
                selRange: NSRange(location: start.utf16Offset(in: candidatePreview), length: candidatePreview.utf16.distance(from: start, to: candidatePreview.endIndex)),
                caretPos: candidatePreview.utf16.count)
         }
       } else {
+        // 如果没有启用行内候选字功能
         if inlinePreedit {
+          // 如果启用了行内编辑，直接显示输入的文本
           show(preedit: preedit, selRange: NSRange(location: start.utf16Offset(in: preedit), length: preedit.utf16.distance(from: start, to: end)), caretPos: caretPos.utf16Offset(in: preedit))
         } else {
-          // TRICKY: display a non-empty string to prevent iTerm2 from echoing
-          // each character in preedit. note this is a full-shape space U+3000;
-          // using half shape characters like "..." will result in an unstable
-          // baseline when composing Chinese characters.
+          // 这是一个巧妙的技巧：显示一个非空字符串来防止终端（iTerm2）回显输入的每个字符
+          // 注意这里使用的是全角空格（U+3000）；如果使用半角字符如"..."
+          // 在输入中文字符时会导致基线不稳定（文字上下跳动）
           show(preedit: preedit.isEmpty ? "" : "　", selRange: NSRange(location: 0, length: 0), caretPos: 0)
         }
       }
 
-      // update candidates
-      let numCandidates = Int(ctx.menu.num_candidates)
-      var candidates = [String]()
-      var comments = [String]()
+      // 更新候选词列表
+      let numCandidates = Int(ctx.menu.num_candidates)  // 获取候选词的数量
+      var candidates = [String]()  // 创建一个数组来存储候选词
+      var comments = [String]()   // 创建一个数组来存储候选词的注释
+      
+      // 遍历所有候选词，将它们添加到数组中
       for i in 0..<numCandidates {
-        let candidate = ctx.menu.candidates[i]
-        candidates.append(candidate.text.map { String(cString: $0) } ?? "")
-        comments.append(candidate.comment.map { String(cString: $0) } ?? "")
+        let candidate = ctx.menu.candidates[i]  // 获取第i个候选词
+        candidates.append(candidate.text.map { String(cString: $0) } ?? "")  // 添加候选词文本
+        comments.append(candidate.comment.map { String(cString: $0) } ?? "")  // 添加候选词注释
       }
-      var labels = [String]()
-      // swiftlint:disable identifier_name
+      
+      var labels = [String]()  // 创建一个数组来存储候选词的标签（如1、2、3或a、b、c）
+      
+      // 设置候选词的选择标签
+      // swiftlint:disable identifier_name  // 告诉代码检查工具忽略命名规则
       if let select_keys = ctx.menu.select_keys {
+        // 如果设置了选择键（如asdf或1234），将它们转换为标签
         labels = String(cString: select_keys).map { String($0) }
       } else if let select_labels = ctx.select_labels {
-        let pageSize = Int(ctx.menu.page_size)
+        // 如果设置了选择标签，使用它们
+        let pageSize = Int(ctx.menu.page_size)  // 获取每页显示的候选词数量
         for i in 0..<pageSize {
           labels.append(select_labels[i].map { String(cString: $0) } ?? "")
         }
       }
-      // swiftlint:enable identifier_name
-      let page = Int(ctx.menu.page_no)
-      let lastPage = ctx.menu.is_last_page
+      // swiftlint:enable identifier_name  // 恢复命名规则检查
+      
+      // 获取当前页码和是否是最后一页的信息
+      let page = Int(ctx.menu.page_no)  // 当前是第几页候选词
+      let lastPage = ctx.menu.is_last_page  // 是否是最后一页
 
+      // 计算选中区域的范围
       let selRange = NSRange(location: start.utf16Offset(in: preedit), length: preedit.utf16.distance(from: start, to: end))
+      
+      // 显示候选词面板
       showPanel(preedit: inlinePreedit ? "" : preedit, selRange: selRange, caretPos: caretPos.utf16Offset(in: preedit),
                 candidates: candidates, comments: comments, labels: labels, highlighted: Int(ctx.menu.highlighted_candidate_index),
                 page: page, lastPage: lastPage)
-      _ = rimeAPI.free_context(&ctx)
+      
+      _ = rimeAPI.free_context(&ctx)  // 释放上下文占用的内存，就像清理用完的资料
     } else {
+      // 如果获取上下文失败，隐藏输入面板
       hidePalettes()
     }
   }

@@ -11,6 +11,7 @@ import Foundation
 import InputMethodKit
 
 // @main 表示这是程序的入口点，就像房子的正门一样，程序从这里开始运行
+@main
 struct SquirrelApp {
   // 定义用户目录的路径，这里存放用户的个性化配置文件
   // pwuid = getpwuid(getuid()) 获取当前进程的用户ID, 根据用户ID获取用户的详细信息
