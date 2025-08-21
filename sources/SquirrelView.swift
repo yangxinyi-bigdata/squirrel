@@ -39,6 +39,7 @@ extension NSAttributedString.Key {
 final class SquirrelView: NSView {
   // 类的属性定义，就像这个视图的各种特征和工具
   let textView: NSTextView                    // 文本视图，负责显示和管理文本内容
+  let scrollView: NSScrollView               // 滚动视图，裁切超出可见区域并显示滚动条
 
   private let squirrelLayoutDelegate: SquirrelLayoutDelegate  // 文本布局代理
   var candidateRanges: [NSRange] = []         // 候选字在文本中的位置范围列表
@@ -76,20 +77,43 @@ final class SquirrelView: NSView {
   // 初始化函数，创建一个新的鼠须管视图
   override init(frame frameRect: NSRect) {
     squirrelLayoutDelegate = SquirrelLayoutDelegate()  // 创建布局代理
-    textView = NSTextView(frame: frameRect)            // 创建文本视图
+  textView = NSTextView(frame: frameRect)            // 创建文本视图
+  scrollView = NSScrollView(frame: frameRect)        // 创建滚动视图
     
     // 配置文本视图的属性
     textView.drawsBackground = false                   // 不绘制背景（透明背景）
     textView.isEditable = false                        // 不可编辑（只显示）
     textView.isSelectable = false                      // 不可选择文本
-    textView.textLayoutManager?.delegate = squirrelLayoutDelegate  // 设置布局代理
+  textView.textLayoutManager?.delegate = squirrelLayoutDelegate  // 设置布局代理
     
     super.init(frame: frameRect)                       // 调用父类初始化
     
     // 进一步配置
-    textContainer.lineFragmentPadding = 0              // 设置行片段内边距为0
+  textContainer.lineFragmentPadding = 0              // 设置行片段内边距为0
     self.wantsLayer = true                             // 启用图层支持
     self.layer?.masksToBounds = true                   // 图层内容不超出边界
+  self.autoresizingMask = [.width, .height]
+
+    // 配置滚动容器与文本视图关系
+    scrollView.drawsBackground = false
+    scrollView.hasVerticalScroller = true
+    scrollView.hasHorizontalScroller = false
+    scrollView.scrollerStyle = .overlay
+    scrollView.borderType = .noBorder
+    scrollView.autohidesScrollers = true
+  scrollView.usesPredominantAxisScrolling = true
+    scrollView.documentView = textView
+
+    // 让文本在垂直方向可扩展，由滚动容器裁切
+    textView.isVerticallyResizable = true
+    textView.isHorizontallyResizable = false
+  if let container = textView.textContainer {
+      container.widthTracksTextView = true
+      container.heightTracksTextView = false
+  container.containerSize = NSSize(width: frameRect.width, height: CGFloat.greatestFiniteMagnitude)
+    }
+
+  // 注意：scrollView 不在此处添加为子视图，由面板负责将其加入层级
   }
   
   // 必需的初始化器（从 Interface Builder 加载时使用）
@@ -107,6 +131,11 @@ final class SquirrelView: NSView {
   var isDark: Bool {
     // 获取系统当前外观，检查是否匹配深色外观
     NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+  }
+
+  // 当前滚动偏移（文档坐标 -> 可见坐标）
+  var scrollOffset: NSPoint {
+    return scrollView.contentView.bounds.origin
   }
 
   // 将 NSRange 转换为 NSTextRange 的工具函数
@@ -155,6 +184,9 @@ final class SquirrelView: NSView {
     
     // 枚举文本段，计算每个段的矩形
     textLayoutManager.enumerateTextSegments(in: range, type: .standard, options: .rangeNotRequired) { _, rect, _, _ in
+      var rect = rect
+      rect.origin.x -= scrollOffset.x
+      rect.origin.y -= scrollOffset.y
       x0 = min(rect.minX, x0)  // 更新边界
       x1 = max(rect.maxX, x1)
       y0 = min(rect.minY, y0)
@@ -287,8 +319,8 @@ final class SquirrelView: NSView {
     // 创建一个带圆角的背景路径，就像画一个圆角矩形框架
     backgroundPath = drawSmoothLines(rectVertex(of: backgroundRect), straightCorner: Set(), alpha: 0.3 * theme.cornerRadius, beta: 1.4 * theme.cornerRadius)
 
-    // 清空现有的图层，重新开始绘制，就像清空画布准备重新画
-    self.layer?.sublayers = nil
+  // 清空现有的图层，重新开始绘制
+  self.layer?.sublayers = nil
     // 创建主背景路径的副本，用于合并所有图形元素
     let backPath = backgroundPath?.mutableCopy()
     // 如果有输入预览区域，将其路径合并到主背景中
@@ -313,7 +345,7 @@ final class SquirrelView: NSView {
     let panelLayerMask = shapeFromPath(path: backgroundPath)
     panelLayer.mask = panelLayerMask
     // 将主图层添加到视图中
-    self.layer?.addSublayer(panelLayer)
+  self.layer?.addSublayer(panelLayer)
 
     // 开始填充各种颜色和效果
     // 绘制输入预览区域的背景色
@@ -402,8 +434,8 @@ final class SquirrelView: NSView {
       self.upPath = upPath.copy()  // 保存上一页路径供点击检测使用
     }
 
-    // 将所有路径设置到形状图层中，完成最终的界面绘制
-    shape.path = panelPath
+  // 将所有路径设置到形状图层中，完成最终的界面绘制
+  shape.path = panelPath
   }
 
   // 点击检测函数：判断用户点击了哪个区域（候选字、翻页按钮等）
@@ -426,6 +458,9 @@ final class SquirrelView: NSView {
       // 计算相对于文本视图的点击坐标，就像把全局坐标转换为局部坐标
       var point = NSPoint(x: clickPoint.x - textView.textContainerInset.width - currentTheme.pagingOffset,
                           y: clickPoint.y - textView.textContainerInset.height)
+      // 加回滚动偏移以对齐文档坐标
+      point.x += scrollView.contentView.bounds.origin.x
+      point.y += scrollView.contentView.bounds.origin.y
       
       // 找到包含点击点的文本布局片段
       let fragment = textLayoutManager.textLayoutFragment(for: point)
@@ -562,6 +597,9 @@ private extension SquirrelView {
     // 遍历文本范围内的所有文本段，收集每行的矩形区域
     textLayoutManager.enumerateTextSegments(in: range, type: .standard, options: [.rangeNotRequired]) { _, rect, _, _ in
       var newRect = rect
+      // 文档坐标 -> 可见坐标（扣除滚动偏移）
+      newRect.origin.x -= scrollOffset.x
+      newRect.origin.y -= scrollOffset.y
       newRect.origin.x += edgeInset.width  // 应用水平边距
       newRect.origin.y += edgeInset.height  // 应用垂直边距
       newRect.size.height += currentTheme.linespace  // 增加行间距

@@ -171,6 +171,9 @@ final class SquirrelTheme {
   // 是否显示分页信息
   private(set) var showPaging = false
 
+  // 候选区最大可见高度（pt）。为 nil 表示不限制，仅受屏幕尺寸限制。
+  private(set) var maxCandidateHeight: CGFloat?
+
   // 定义字体相关的属性
   // 就像是为不同的文本选择不同的"笔迹"
   
@@ -203,9 +206,9 @@ final class SquirrelTheme {
   // 如果设置了字体大小，就使用设置的大小；否则使用默认大小
   private var defaultFont: NSFont {
     if let size = fontSize {
-      Self.defaultFont.withSize(size)  // 使用设置的大小
+  return Self.defaultFont.withSize(size)  // 使用设置的大小
     } else {
-      Self.defaultFont                 // 使用默认大小
+  return Self.defaultFont                 // 使用默认大小
     }
   }
 
@@ -373,6 +376,7 @@ final class SquirrelTheme {
     mutualExclusive ?= config.getBool("style/mutual_exclusive")                              // 是否互斥显示
     memorizeSize ?= config.getBool("style/memorize_size")                                    // 是否记住大小
     showPaging ?= config.getBool("style/show_paging")                                        // 是否显示分页
+    maxCandidateHeight ?= config.getDouble("style/max_candidate_height")                     // 候选区最大可见高度
 
     // 加载消息相关的设置
     statusMessageType ?= .init(rawValue: config.getString("style/status_message_type") ?? "")  // 状态消息类型
@@ -430,6 +434,7 @@ final class SquirrelTheme {
         translucency ?= config.getBool("\(prefix)/translucency")
         mutualExclusive ?= config.getBool("\(prefix)/mutual_exclusive")
         showPaging ?= config.getBool("\(prefix)/show_paging")
+        maxCandidateHeight ?= config.getDouble("\(prefix)/max_candidate_height")
         candidateFormat ?= config.getString("\(prefix)/candidate_format")
         fontName ?= config.getString("\(prefix)/font_face")
         fontSize ?= config.getDouble("\(prefix)/font_point")

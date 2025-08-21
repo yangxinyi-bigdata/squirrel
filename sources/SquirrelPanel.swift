@@ -71,8 +71,9 @@ final class SquirrelPanel: NSPanel {
     // 创建内容视图并添加子视图
     let contentView = NSView()
     contentView.addSubview(back)         // 添加背景视图
-    contentView.addSubview(view)         // 添加主视图
-    contentView.addSubview(view.textView) // 添加文本视图
+  contentView.addSubview(view)         // 添加主视图（负责绘制形状、底色等）
+  // 将滚动容器置于最上层以显示文本与滚动条
+  contentView.addSubview(view.scrollView) // 添加滚动容器（内部包含 textView）
     self.contentView = contentView       // 设置为面板的内容视图
   }
 
@@ -151,6 +152,22 @@ final class SquirrelPanel: NSPanel {
         update(preedit: preedit, selRange: selRange, caretPos: caretPos, candidates: candidates, comments: comments, labels: labels, highlighted: index, page: page, lastPage: lastPage, update: false)
       }
     case .scrollWheel:   // 滚轮或触摸板滚动事件
+      // 若候选区内容超出且显示滚动条，则优先交给滚动视图处理滚动，避免触发翻页
+      do {
+        let theme = view.currentTheme
+        var preeditDocHeight: CGFloat = 0
+        if view.preeditRange.length > 0, let pr = view.convert(range: view.preeditRange) {
+          preeditDocHeight = view.contentRect(range: pr).height
+        }
+        let topInset = (view.preeditRange.length > 0 && !candidates.isEmpty)
+          ? (theme.edgeInset.height + preeditDocHeight + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2)
+          : 0
+        let totalDocHeight = view.contentRect.height + theme.edgeInset.height * 2
+        let candidateDocHeight = max(0, totalDocHeight - topInset - theme.edgeInset.height)
+        let candidateVisibleHeight = max(0, view.scrollView.bounds.height - topInset - theme.edgeInset.height)
+        let shouldScroll = view.scrollView.hasVerticalScroller && candidateDocHeight > candidateVisibleHeight + 0.5
+        if shouldScroll { break }
+      }
       if event.phase == .began {  // 滚动开始
         scrollDirection = .zero
         // Scrollboard span - 触摸板滚动跨度
@@ -366,7 +383,12 @@ final class SquirrelPanel: NSPanel {
 
     // 文本处理完成！
     // 将处理好的富文本设置到文本视图中
-    view.textView.textContentStorage?.attributedString = text
+  // 同时更新 TextKit2 与 TextKit1，避免在不同系统/配置下出现空白
+  view.textView.textContentStorage?.attributedString = text
+  view.textView.textStorage?.setAttributedString(text)
+  // 触发布局计算，避免首次渲染出现空白
+  view.textLayoutManager.ensureLayout(for: view.textLayoutManager.documentRange)
+  view.textView.layoutSubtreeIfNeeded()
     // 设置文本布局方向（垂直或水平）
     view.textView.setLayoutOrientation(vertical ? .vertical : .horizontal)
     // 绘制视图，包括候选字高亮、翻页按钮等
@@ -461,10 +483,9 @@ private extension SquirrelPanel {
       self.appearance = NSAppearance(named: .aqua)
     }
 
-    // 根据屏幕大小限制文本长度，防止文本过长
-    let textWidth = maxTextWidth()
-    let maxTextHeight = vertical ? screenRect.width - theme.edgeInset.width * 2 : screenRect.height - theme.edgeInset.height * 2
-    view.textContainer.size = NSSize(width: textWidth, height: maxTextHeight)
+  // 根据屏幕大小限制文本宽度；高度先给无限以获取自然内容高度
+  let textWidth = maxTextWidth()
+  view.textContainer.size = NSSize(width: textWidth, height: CGFloat.greatestFiniteMagnitude)
 
     var panelRect = NSRect.zero  // 面板的矩形区域
     // 在垂直模式下，宽度和高度会互换
@@ -476,15 +497,21 @@ private extension SquirrelPanel {
       if contentRect.width >= maxHeight {
         maxHeight = contentRect.width  // 更新最大高度
       } else {
-        contentRect.size.width = maxHeight  // 使用记忆的高度
-        view.textContainer.size = NSSize(width: maxHeight, height: maxTextHeight)
+  contentRect.size.width = maxHeight  // 使用记忆的高度
+  view.textContainer.size = NSSize(width: maxHeight, height: CGFloat.greatestFiniteMagnitude)
       }
     }
 
     if vertical {
       // 垂直模式的面板大小和位置计算
-      panelRect.size = NSSize(width: min(0.95 * screenRect.width, contentRect.height + theme.edgeInset.height * 2),
-                              height: min(0.95 * screenRect.height, contentRect.width + theme.edgeInset.width * 2) + theme.pagingOffset)
+      var width = contentRect.height + theme.edgeInset.height * 2
+      var height = contentRect.width + theme.edgeInset.width * 2
+      // 应用候选区域最大可见高度（此处针对“短边”定义：旋转后显示区域的高度即这里的 height）
+      if let maxH = theme.maxCandidateHeight {
+        height = min(height, maxH)
+      }
+      panelRect.size = NSSize(width: min(0.95 * screenRect.width, width),
+                              height: min(0.95 * screenRect.height, height) + theme.pagingOffset)
 
       // 为了避免打字时上下跳动，在上半屏幕打字时使用下半屏幕，反之亦然
       if position.midY / screenRect.height >= 0.5 {
@@ -501,8 +528,13 @@ private extension SquirrelPanel {
       }
     } else {
       // 水平模式的面板大小和位置计算
-      panelRect.size = NSSize(width: min(0.95 * screenRect.width, contentRect.width + theme.edgeInset.width * 2),
-                              height: min(0.95 * screenRect.height, contentRect.height + theme.edgeInset.height * 2))
+      var width = contentRect.width + theme.edgeInset.width * 2
+      var height = contentRect.height + theme.edgeInset.height * 2
+      if let maxH = theme.maxCandidateHeight {
+        height = min(height, maxH)
+      }
+      panelRect.size = NSSize(width: min(0.95 * screenRect.width, width),
+                              height: min(0.95 * screenRect.height, height))
       panelRect.size.width += theme.pagingOffset
       panelRect.origin = NSPoint(x: position.minX - theme.pagingOffset, y: position.minY - SquirrelTheme.offsetHeight - panelRect.height)
     }
@@ -536,15 +568,54 @@ private extension SquirrelPanel {
       contentView!.boundsRotation = 0    // 水平模式不旋转
       contentView!.setBoundsOrigin(.zero)
     }
-    view.textView.boundsRotation = 0     // 文本视图始终不旋转
-    view.textView.setBoundsOrigin(.zero)
+  view.textView.boundsRotation = 0     // 文本视图始终不旋转
+  view.textView.setBoundsOrigin(.zero)
 
     // 设置各个视图的框架
-    view.frame = contentView!.bounds
-    view.textView.frame = contentView!.bounds
-    view.textView.frame.size.width -= theme.pagingOffset       // 为翻页按钮留出空间
-    view.textView.frame.origin.x += theme.pagingOffset
-    view.textView.textContainerInset = theme.edgeInset         // 设置文本容器的内边距
+  view.frame = contentView!.bounds
+  view.scrollView.frame = contentView!.bounds
+  view.scrollView.frame.size.width -= theme.pagingOffset       // 为翻页按钮留出空间
+  view.scrollView.frame.origin.x += theme.pagingOffset
+  view.textView.textContainerInset = theme.edgeInset           // 设置文本容器的内边距
+
+  // 明确同步 textView 尺寸与滚动偏移，避免初始出现空白
+  view.textView.frame = view.scrollView.bounds
+  view.textView.minSize = .zero
+  view.textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+  view.textView.autoresizingMask = [.width, .height]
+  view.scrollView.contentView.scroll(to: NSPoint(x: 0, y: 0))
+  view.scrollView.reflectScrolledClipView(view.scrollView.contentView)
+
+  // 仅在内容超出可见区域时显示滚动条
+  // 使用 TextKit 计算到的文档可见尺寸与面板可见高度进行比较
+  let docHeight = view.contentRect.height + theme.edgeInset.height * 2
+  let visibleHeight = view.scrollView.bounds.height
+  view.scrollView.hasVerticalScroller = docHeight > visibleHeight + 0.5
+
+    // 计算预编辑区域的“视觉高度”，用于限制滚动条只在候选区显示
+    var preeditDocHeight: CGFloat = 0
+    if view.preeditRange.length > 0, let pr = view.convert(range: view.preeditRange) {
+      preeditDocHeight = view.contentRect(range: pr).height
+    }
+    let topScrollerInset = (view.preeditRange.length > 0 && !candidates.isEmpty)
+      ? (theme.edgeInset.height + preeditDocHeight + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2)
+      : 0
+    // 设置滚动条只在候选区显示
+    if #available(macOS 11.0, *) {
+      view.scrollView.scrollerInsets = NSEdgeInsets(top: topScrollerInset, left: 0, bottom: theme.edgeInset.height, right: 0)
+    }
+    // 仅当候选区内容高度超过候选区可见高度时才显示滚动条
+    let totalDocHeight = view.contentRect.height + theme.edgeInset.height * 2
+    let candidateDocHeight = max(0, totalDocHeight - topScrollerInset - theme.edgeInset.height)
+    let candidateVisibleHeight = max(0, view.scrollView.bounds.height - topScrollerInset - theme.edgeInset.height)
+    let exceeds = candidateDocHeight > candidateVisibleHeight + 0.5
+    if let maxH = theme.maxCandidateHeight {
+      // 当面板高度未达到限制时不显示滚动条
+      let panelCapNotReached = (view.scrollView.bounds.height < maxH - 0.5)
+      view.scrollView.hasVerticalScroller = exceeds && !panelCapNotReached
+    } else {
+      view.scrollView.hasVerticalScroller = exceeds
+    }
 
     // 处理半透明背景效果
     if theme.translucency {
