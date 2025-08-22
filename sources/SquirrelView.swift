@@ -598,56 +598,58 @@ private extension SquirrelView {
     textLayoutManager.enumerateTextSegments(in: range, type: .standard, options: [.rangeNotRequired]) { _, rect, _, _ in
       var newRect = rect
       // 文档坐标 -> 可见坐标（扣除滚动偏移）
-      newRect.origin.x -= scrollOffset.x
-      newRect.origin.y -= scrollOffset.y
-      newRect.origin.x += edgeInset.width  // 应用水平边距
-      newRect.origin.y += edgeInset.height  // 应用垂直边距
-      newRect.size.height += currentTheme.linespace  // 增加行间距
-      newRect.origin.y -= currentTheme.linespace / 2  // 调整垂直位置以居中行间距
-      lineRects.append(newRect)  // 将处理后的矩形添加到数组
-      return true  // 继续遍历
+      newRect.origin.x -= scrollOffset.x  // 扣除水平滚动偏移量，转换为视图坐标系
+      newRect.origin.y -= scrollOffset.y  // 扣除垂直滚动偏移量，转换为视图坐标系
+      newRect.origin.x += edgeInset.width  // 应用水平边距，给文字留出内边距
+      newRect.origin.y += edgeInset.height  // 应用垂直边距，给文字留出内边距
+      newRect.size.height += currentTheme.linespace  // 增加行间距，让文字行之间有合适的空隙
+      newRect.origin.y -= currentTheme.linespace / 2  // 调整垂直位置以居中行间距，保持对称
+      lineRects.append(newRect)  // 将处理后的矩形添加到数组，用于后续计算
+      return true  // 继续遍历下一个文本段
     }
 
-    // 根据行数分配三个区域
-    var leadingRect = NSRect.zero    // 首行不完整区域
-    var bodyRect = NSRect.zero       // 中间完整行区域
-    var trailingRect = NSRect.zero   // 末行不完整区域
+    // 根据行数分配三个区域，这样做是为了处理多行高亮的复杂情况
+    // 比如用户选择了跨越多行的文本，需要分别处理不完整的首尾行和完整的中间行
+    var leadingRect = NSRect.zero    // 首行不完整区域（第一行可能只选中了一部分）
+    var bodyRect = NSRect.zero       // 中间完整行区域（完整选中的行，占满整行宽度）
+    var trailingRect = NSRect.zero   // 末行不完整区域（最后一行可能只选中了一部分）
     
     if lineRects.count == 1 {
-      // 只有一行：全部作为主体区域
+      // 只有一行：全部作为主体区域，最简单的情况
       bodyRect = lineRects[0]
     } else if lineRects.count == 2 {
-      // 两行：分别作为首行和末行
+      // 两行：分别作为首行和末行，中间没有完整行
       leadingRect = lineRects[0]
       trailingRect = lineRects[1]
     } else if lineRects.count > 2 {
-      // 多行：首行、中间行、末行分别处理
-      leadingRect = lineRects[0]  // 第一行
-      trailingRect = lineRects[lineRects.count-1]  // 最后一行
+      // 多行：首行、中间行、末行分别处理，这是最复杂的情况
+      leadingRect = lineRects[0]  // 第一行（部分选中）
+      trailingRect = lineRects[lineRects.count-1]  // 最后一行（部分选中）
       
-      // 计算中间所有行的边界框
+      // 计算中间所有行的边界框，这些行是完全选中的
+      // 使用边界计算法找出包含所有中间行的最小矩形
       // swiftlint:disable:next identifier_name
       var x0 = CGFloat.infinity, x1 = -CGFloat.infinity, y0 = CGFloat.infinity, y1 = -CGFloat.infinity
-      for i in 1..<(lineRects.count-1) {
+      for i in 1..<(lineRects.count-1) {  // 跳过首行和末行，只处理中间行
         let rect = lineRects[i]
-        x0 = min(rect.minX, x0)  // 最左边
-        x1 = max(rect.maxX, x1)  // 最右边
-        y0 = min(rect.minY, y0)  // 最下边
-        y1 = max(rect.maxY, y1)  // 最上边
+        x0 = min(rect.minX, x0)  // 找到最左边的位置
+        x1 = max(rect.maxX, x1)  // 找到最右边的位置
+        y0 = min(rect.minY, y0)  // 找到最下边的位置
+        y1 = max(rect.maxY, y1)  // 找到最上边的位置
       }
-      // 确保中间区域与首末行正确连接
-      y0 = min(leadingRect.maxY, y0)
-      y1 = max(trailingRect.minY, y1)
+      // 确保中间区域与首末行正确连接，避免出现间隙
+      y0 = min(leadingRect.maxY, y0)  // 中间区域的上边界不能超过首行的下边界
+      y1 = max(trailingRect.minY, y1)  // 中间区域的下边界不能低于末行的上边界
       bodyRect = NSRect(x: x0, y: y0, width: x1-x0, height: y1-y0)  // 构建中间区域矩形
     }
 
-    // 如果需要额外的周围间距
+    // 如果需要额外的周围间距（让高亮区域更明显）
     if extraSurounding > 0 {
       if nearEmpty(leadingRect) && nearEmpty(trailingRect) {
-        // 只有主体区域时，扩展其宽度
+        // 只有主体区域时，扩展其宽度，让高亮区域在候选字周围有更多空间
         bodyRect = expandHighlightWidth(rect: bodyRect, extraSurrounding: extraSurounding)
       } else {
-        // 分别为首行和末行扩展宽度
+        // 分别为首行和末行扩展宽度，确保每个区域都有合适的间距
         if !(nearEmpty(leadingRect)) {
           leadingRect = expandHighlightWidth(rect: leadingRect, extraSurrounding: extraSurounding)
         }
@@ -658,23 +660,24 @@ private extension SquirrelView {
     }
 
     // 调整多行文本的矩形以确保正确的布局对齐
+    // 这是为了让多行选择看起来是一个连贯的区域，而不是分离的矩形
     if !nearEmpty(leadingRect) && !nearEmpty(trailingRect) {
-      // 首行延伸到右边界
+      // 首行延伸到右边界，因为用户选择从某个位置开始到行尾
       leadingRect.size.width = bounds.maxX - leadingRect.origin.x
-      // 末行从左边界开始
+      // 末行从左边界开始，因为用户选择从行首到某个位置结束
       trailingRect.size.width = trailingRect.maxX - bounds.minX
       trailingRect.origin.x = bounds.minX
       
       if !nearEmpty(bodyRect) {
-        // 中间区域占满整个宽度
+        // 中间区域占满整个宽度，因为这些行是完全选中的
         bodyRect.size.width = bounds.size.width
         bodyRect.origin.x = bounds.origin.x
       } else {
-        // 如果没有中间区域，调整首末行的连接
+        // 如果没有中间区域（只有两行），调整首末行的连接
         let diff = trailingRect.minY - leadingRect.maxY  // 计算首末行之间的间隙
-        leadingRect.size.height += diff / 2    // 首行向下延伸一半间隙
-        trailingRect.size.height += diff / 2   // 末行向上延伸一半间隙
-        trailingRect.origin.y -= diff / 2      // 调整末行位置
+        leadingRect.size.height += diff / 2    // 首行向下延伸一半间隙，连接到中间
+        trailingRect.size.height += diff / 2   // 末行向上延伸一半间隙，连接到中间
+        trailingRect.origin.y -= diff / 2      // 调整末行位置，确保连接自然
       }
     }
 
@@ -682,289 +685,384 @@ private extension SquirrelView {
   }
 
   // 根据multilineRectForRange得到的3个矩形，计算包含指定文本范围的多边形顶点
+  // 这个函数的作用是将矩形区域转换为多边形顶点，以便绘制复杂的多行高亮形状
+  // 不同的矩形组合会产生不同形状的多边形，比如L形、矩形、或者复杂的连接形状
   func multilineVertex(leadingRect: NSRect, bodyRect: NSRect, trailingRect: NSRect) -> [NSPoint] {
     // 根据不同的矩形组合情况，返回相应的多边形顶点
     if nearEmpty(bodyRect) && !nearEmpty(leadingRect) && nearEmpty(trailingRect) {
-      // 只有首行：返回首行矩形的顶点
+      // 只有首行：返回首行矩形的顶点，这是最简单的情况
       return rectVertex(of: leadingRect)
     } else if nearEmpty(bodyRect) && nearEmpty(leadingRect) && !nearEmpty(trailingRect) {
-      // 只有末行：返回末行矩形的顶点
+      // 只有末行：返回末行矩形的顶点，也是简单的矩形情况
       return rectVertex(of: trailingRect)
     } else if nearEmpty(leadingRect) && nearEmpty(trailingRect) && !nearEmpty(bodyRect) {
-      // 只有主体：返回主体矩形的顶点
+      // 只有主体：返回主体矩形的顶点，单行或者整行选择的情况
       return rectVertex(of: bodyRect)
     } else if nearEmpty(trailingRect) && !nearEmpty(bodyRect) {
-      // 有首行和主体，无末行：连接首行和主体区域
+      // 有首行和主体，无末行：连接首行和主体区域，形成L形或者T形
       let leadingVertex = rectVertex(of: leadingRect)
       let bodyVertex = rectVertex(of: bodyRect)
+      // 按特定顺序连接两个矩形的顶点，形成一个连贯的多边形
       return [bodyVertex[0], bodyVertex[1], bodyVertex[2], leadingVertex[3], leadingVertex[0], leadingVertex[1]]
     } else if nearEmpty(leadingRect) && !nearEmpty(bodyRect) {
-      // 有末行和主体，无首行：连接主体和末行区域
+      // 有末行和主体，无首行：连接主体和末行区域，形成另一种L形
       let trailingVertex = rectVertex(of: trailingRect)
       let bodyVertex = rectVertex(of: bodyRect)
+      // 按顺序连接，确保多边形的连续性
       return [trailingVertex[1], trailingVertex[2], trailingVertex[3], bodyVertex[2], bodyVertex[3], bodyVertex[0]]
     } else if !nearEmpty(leadingRect) && !nearEmpty(trailingRect) && nearEmpty(bodyRect) && (leadingRect.maxX>trailingRect.minX) {
-      // 只有首行和末行，且有重叠：创建连接的多边形
+      // 只有首行和末行，且有重叠：创建连接的多边形，处理跨行但没有完整中间行的情况
       let leadingVertex = rectVertex(of: leadingRect)
       let trailingVertex = rectVertex(of: trailingRect)
+      // 创建一个复杂的八边形，连接两个不相邻的矩形
       return [trailingVertex[0], trailingVertex[1], trailingVertex[2], trailingVertex[3], leadingVertex[2], leadingVertex[3], leadingVertex[0], leadingVertex[1]]
     } else if !nearEmpty(leadingRect) && !nearEmpty(trailingRect) && !nearEmpty(bodyRect) {
-      // 三个区域都存在：创建完整的多行多边形
+      // 三个区域都存在：创建完整的多行多边形，这是最复杂的情况
       let leadingVertex = rectVertex(of: leadingRect)
       let bodyVertex = rectVertex(of: bodyRect)
       let trailingVertex = rectVertex(of: trailingRect)
+      // 创建一个连接三个区域的复杂多边形，确保所有区域都平滑连接
       return [trailingVertex[1], trailingVertex[2], trailingVertex[3], bodyVertex[2], leadingVertex[3], leadingVertex[0], leadingVertex[1], bodyVertex[0]]
     } else {
-      // 其他情况：返回空数组
+      // 其他情况：返回空数组，表示没有有效的多边形可以绘制
       return [NSPoint]()
     }
   }
 
   // 将顶点扩展到外边界：如果顶点在内边界外，将其扩展到外边界
+  // 这个函数用于确保高亮区域不会超出允许的边界范围
+  // 就像给绘制区域加上一个"栅栏"，顶点不能越过这个边界
   func expand(vertex: [NSPoint], innerBorder: NSRect, outerBorder: NSRect) -> [NSPoint] {
     var newVertex = [NSPoint]()
     for i in 0..<vertex.count {
       var point = vertex[i]
+      // 检查和调整水平方向的边界
       if point.x < innerBorder.origin.x {
+        // 如果点在内边界左侧，移动到外边界左侧
         point.x = outerBorder.origin.x
       } else if point.x > innerBorder.origin.x+innerBorder.size.width {
+        // 如果点在内边界右侧，移动到外边界右侧
         point.x = outerBorder.origin.x+outerBorder.size.width
       }
+      // 检查和调整垂直方向的边界
       if point.y < innerBorder.origin.y {
+        // 如果点在内边界下方，移动到外边界下方
         point.y = outerBorder.origin.y
       } else if point.y > innerBorder.origin.y+innerBorder.size.height {
+        // 如果点在内边界上方，移动到外边界上方
         point.y = outerBorder.origin.y+outerBorder.size.height
       }
-      newVertex.append(point)
+      newVertex.append(point)  // 将调整后的点加入新的顶点数组
     }
-    return newVertex
+    return newVertex  // 返回边界调整后的顶点数组
   }
 
+  // 根据向量差值计算方向向量，用于确定边缘扩展的方向
+  // 这个函数将任意方向简化为4个基本方向：上、下、左、右
   func direction(diff: CGPoint) -> CGPoint {
     if diff.y == 0 && diff.x > 0 {
-      return NSPoint(x: 0, y: 1)
+      return NSPoint(x: 0, y: 1)    // 向右移动 -> 向上扩展
     } else if diff.y == 0 && diff.x < 0 {
-      return NSPoint(x: 0, y: -1)
+      return NSPoint(x: 0, y: -1)   // 向左移动 -> 向下扩展
     } else if diff.x == 0 && diff.y > 0 {
-      return NSPoint(x: -1, y: 0)
+      return NSPoint(x: -1, y: 0)   // 向上移动 -> 向左扩展
     } else if diff.x == 0 && diff.y < 0 {
-      return NSPoint(x: 1, y: 0)
+      return NSPoint(x: 1, y: 0)    // 向下移动 -> 向右扩展
     } else {
-      return NSPoint(x: 0, y: 0)
+      return NSPoint(x: 0, y: 0)    // 斜向或无移动 -> 不扩展
     }
   }
 
+  // 从CGPath创建CAShapeLayer的便捷函数
+  // CAShapeLayer是Core Animation中用于绘制形状的图层类
   func shapeFromPath(path: CGPath?) -> CAShapeLayer {
-    let layer = CAShapeLayer()
-    layer.path = path
-    layer.fillRule = .evenOdd
-    return layer
+    let layer = CAShapeLayer()        // 创建新的形状图层
+    layer.path = path                 // 设置图层的路径
+    layer.fillRule = .evenOdd         // 设置填充规则为奇偶规则，处理复杂形状的内外判断
+    return layer                      // 返回配置好的图层
   }
 
+  // 顺时针扩展多边形顶点，用于创建加粗的边框效果
+  // 这个函数假设顶点是按顺时针方向排列的，通过向外扩展每个顶点来增大多边形
   // Assumes clockwise iteration
   func enlarge(vertex: [NSPoint], by: Double) -> [NSPoint] {
-    if by != 0 {
-      var previousPoint: NSPoint
-      var point: NSPoint
-      var nextPoint: NSPoint
-      var results = vertex
-      var newPoint: NSPoint
-      var displacement: NSPoint
+    if by != 0 {  // 只有在扩展值不为零时才进行处理
+      var previousPoint: NSPoint    // 前一个顶点
+      var point: NSPoint           // 当前顶点
+      var nextPoint: NSPoint       // 下一个顶点
+      var results = vertex         // 复制原始顶点数组作为结果
+      var newPoint: NSPoint        // 计算出的新顶点位置
+      var displacement: NSPoint    // 位移向量
+      
+      // 遍历每个顶点，计算其扩展后的新位置
       for i in 0..<vertex.count {
+        // 获取当前顶点的前后邻居（循环索引）
         previousPoint = vertex[(vertex.count+i-1) % vertex.count]
         point = vertex[i]
         nextPoint = vertex[(i+1) % vertex.count]
-        newPoint = point
+        newPoint = point  // 从当前点开始计算
+        
+        // 根据从前一点到当前点的方向进行扩展
         displacement = direction(diff: point - previousPoint)
-        newPoint.x += by * displacement.x
-        newPoint.y += by * displacement.y
+        newPoint.x += by * displacement.x  // 在x方向扩展
+        newPoint.y += by * displacement.y  // 在y方向扩展
+        
+        // 根据从当前点到下一点的方向进行扩展
         displacement = direction(diff: nextPoint - point)
-        newPoint.x += by * displacement.x
-        newPoint.y += by * displacement.y
-        results[i] = newPoint
+        newPoint.x += by * displacement.x  // 在x方向继续扩展
+        newPoint.y += by * displacement.y  // 在y方向继续扩展
+        
+        results[i] = newPoint  // 保存计算出的新位置
       }
-      return results
+      return results  // 返回扩展后的顶点数组
     } else {
-      return vertex
+      return vertex  // 如果扩展值为零，直接返回原始顶点
     }
   }
 
+  // 在水平方向为候选字之间添加间隙，让候选字在视觉上更容易区分
   // Add gap between horizontal candidates
   func expandHighlightWidth(rect: NSRect, extraSurrounding: CGFloat) -> NSRect {
-    var newRect = rect
-    if !nearEmpty(newRect) {
-      newRect.size.width += extraSurrounding
-      newRect.origin.x -= extraSurrounding / 2
+    var newRect = rect  // 复制原始矩形
+    if !nearEmpty(newRect) {  // 只有当矩形不为空时才进行扩展
+      newRect.size.width += extraSurrounding      // 增加宽度
+      newRect.origin.x -= extraSurrounding / 2    // 向左移动一半距离，保持中心位置
     }
-    return newRect
+    return newRect  // 返回扩展后的矩形
   }
 
+  // 移除过于接近容器边界的角点，避免在边缘创建不自然的圆角
+  // 当高亮区域延伸到容器边缘时，某些角点可能会产生奇怪的视觉效果
   func removeCorner(highlightedPoints: [CGPoint], rightCorners: Set<Int>, containingRect: NSRect) -> Set<Int> {
     if !highlightedPoints.isEmpty && !rightCorners.isEmpty {
-      var result = rightCorners
+      var result = rightCorners  // 复制原始角点集合
       for cornerIndex in rightCorners {
-        let corner = highlightedPoints[cornerIndex]
+        let corner = highlightedPoints[cornerIndex]  // 获取角点坐标
+        // 计算角点到容器上下边界的最小距离
         let dist = min(containingRect.maxY - corner.y, corner.y - containingRect.minY)
-        if dist < 1e-2 {
-          result.remove(cornerIndex)
+        if dist < 1e-2 {  // 如果距离非常小（基本贴边）
+          result.remove(cornerIndex)  // 从角点集合中移除这个角点
         }
       }
-      return result
+      return result  // 返回过滤后的角点集合
     } else {
-      return rightCorners
+      return rightCorners  // 如果没有高亮点或角点，直接返回原集合
     }
   }
 
+  // 为线性多行布局计算顶点和角点
+  // 这个函数处理特殊情况：当包含框分离时的多行高亮
   // swiftlint:disable:next large_tuple
   func linearMultilineFor(body: NSRect, leading: NSRect, trailing: NSRect) -> (Array<NSPoint>, Array<NSPoint>, Set<Int>, Set<Int>) {
-    let highlightedPoints, highlightedPoints2: [NSPoint]
-    let rightCorners, rightCorners2: Set<Int>
-    // Handles the special case where containing boxes are separated
+    let highlightedPoints, highlightedPoints2: [NSPoint]  // 两组高亮点
+    let rightCorners, rightCorners2: Set<Int>             // 两组角点索引
+    
+    // 处理特殊情况：包含框被分离（首行和末行不相连）
     if nearEmpty(body) && !nearEmpty(leading) && !nearEmpty(trailing) && trailing.maxX < leading.minX {
-      highlightedPoints = rectVertex(of: leading)
-      highlightedPoints2 = rectVertex(of: trailing)
-      rightCorners = [2, 3]
-      rightCorners2 = [0, 1]
+      // 首行和末行分离，需要分别处理
+      highlightedPoints = rectVertex(of: leading)   // 首行的矩形顶点
+      highlightedPoints2 = rectVertex(of: trailing) // 末行的矩形顶点
+      rightCorners = [2, 3]   // 首行右侧的两个角点需要保持直角
+      rightCorners2 = [0, 1]  // 末行左侧的两个角点需要保持直角
     } else {
+      // 正常情况：使用多行顶点计算函数
       highlightedPoints = multilineVertex(leadingRect: leading, bodyRect: body, trailingRect: trailing)
-      highlightedPoints2 = []
-      rightCorners = []
+      highlightedPoints2 = []  // 第二组顶点为空
+      rightCorners = []        // 不需要特殊的直角处理
       rightCorners2 = []
     }
     return (highlightedPoints, highlightedPoints2, rightCorners, rightCorners2)
   }
 
+  // 绘制高亮路径的核心函数，处理候选字和预编辑文本的背景高亮
+  // 这是整个高亮系统最复杂的函数，需要考虑多种布局模式和边界情况
   func drawPath(highlightedRange: NSRange, backgroundRect: NSRect, preeditRect: NSRect, containingRect: NSRect, extraExpansion: Double) -> CGPath? {
-    let theme = currentTheme
-    let resultingPath: CGMutablePath?
+    let theme = currentTheme        // 获取当前主题
+    let resultingPath: CGMutablePath?  // 最终的绘制路径
 
+    // 计算当前包含矩形，考虑额外扩展
     var currentContainingRect = containingRect
-    currentContainingRect.size.width += extraExpansion * 2
-    currentContainingRect.size.height += extraExpansion * 2
-    currentContainingRect.origin.x -= extraExpansion
-    currentContainingRect.origin.y -= extraExpansion
+    currentContainingRect.size.width += extraExpansion * 2    // 宽度双向扩展
+    currentContainingRect.size.height += extraExpansion * 2   // 高度双向扩展
+    currentContainingRect.origin.x -= extraExpansion         // 向左扩展
+    currentContainingRect.origin.y -= extraExpansion         // 向上扩展
 
-    let halfLinespace = theme.linespace / 2
+    let halfLinespace = theme.linespace / 2  // 半行间距，用于精确定位
+
+    // 计算内边界框，这是文本实际绘制的区域
     var innerBox = backgroundRect
-    innerBox.size.width -= (theme.edgeInset.width + 1) * 2 - 2 * extraExpansion
-    innerBox.origin.x += theme.edgeInset.width + 1 - extraExpansion
-    innerBox.size.height += 2 * extraExpansion
-    innerBox.origin.y -= extraExpansion
+    innerBox.size.width -= (theme.edgeInset.width + 1) * 2 - 2 * extraExpansion    // 扣除边距和扩展
+    innerBox.origin.x += theme.edgeInset.width + 1 - extraExpansion                // 调整起始位置
+    innerBox.size.height += 2 * extraExpansion                                     // 垂直方向扩展
+    innerBox.origin.y -= extraExpansion                                            // 向下调整
+    
     if preeditRange.length == 0 {
+      // 没有预编辑文本时的调整
       innerBox.origin.y += theme.edgeInset.height + 1
       innerBox.size.height -= (theme.edgeInset.height + 1) * 2
     } else {
+      // 有预编辑文本时需要为其留出空间
       innerBox.origin.y += preeditRect.size.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2 + 1
       innerBox.size.height -= theme.edgeInset.height + preeditRect.size.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2 + 2
     }
-    innerBox.size.height -= theme.linespace
-    innerBox.origin.y += halfLinespace
+    innerBox.size.height -= theme.linespace  // 扣除行间距
+    innerBox.origin.y += halfLinespace       // 调整垂直位置
 
+    // 计算外边界框，这是高亮效果的最大范围
     var outerBox = backgroundRect
     outerBox.size.height -= preeditRect.size.height + max(0, theme.hilitedCornerRadius + theme.borderLineWidth) - 2 * extraExpansion
-    outerBox.size.width -= max(0, theme.hilitedCornerRadius + theme.borderLineWidth)  - 2 * extraExpansion
+    outerBox.size.width -= max(0, theme.hilitedCornerRadius + theme.borderLineWidth) - 2 * extraExpansion
     outerBox.origin.x += max(0.0, theme.hilitedCornerRadius + theme.borderLineWidth) / 2.0 - extraExpansion
     outerBox.origin.y += preeditRect.size.height + max(0, theme.hilitedCornerRadius + theme.borderLineWidth) / 2 - extraExpansion
 
+    // 计算有效的圆角半径，考虑扩展效果
     let effectiveRadius = max(0, theme.hilitedCornerRadius + 2 * extraExpansion / theme.hilitedCornerRadius * max(0, theme.cornerRadius - theme.hilitedCornerRadius))
 
+    // 检查是否使用线性布局模式（支持多行高亮的复杂形状）
     if theme.linear, let highlightedTextRange = convert(range: highlightedRange) {
+      // 线性布局：支持复杂的多行高亮形状，如L形、T形等
       let (leadingRect, bodyRect, trailingRect) = multilineRects(forRange: highlightedTextRange, extraSurounding: separatorWidth, bounds: outerBox)
       var (highlightedPoints, highlightedPoints2, rightCorners, rightCorners2) = linearMultilineFor(body: bodyRect, leading: leadingRect, trailing: trailingRect)
 
-      // Expand the boxes to reach proper border
-      highlightedPoints = enlarge(vertex: highlightedPoints, by: extraExpansion)
-      highlightedPoints = expand(vertex: highlightedPoints, innerBorder: innerBox, outerBorder: outerBox)
-      rightCorners = removeCorner(highlightedPoints: highlightedPoints, rightCorners: rightCorners, containingRect: currentContainingRect)
+      // 扩展顶点以达到适当的边界
+      highlightedPoints = enlarge(vertex: highlightedPoints, by: extraExpansion)  // 按指定值扩展
+      highlightedPoints = expand(vertex: highlightedPoints, innerBorder: innerBox, outerBorder: outerBox)  // 调整到边界内
+      rightCorners = removeCorner(highlightedPoints: highlightedPoints, rightCorners: rightCorners, containingRect: currentContainingRect)  // 移除边缘角点
+      // 绘制主要的高亮路径，使用平滑曲线连接
       resultingPath = drawSmoothLines(highlightedPoints, straightCorner: rightCorners, alpha: 0.3*effectiveRadius, beta: 1.4*effectiveRadius)?.mutableCopy()
 
+      // 如果有第二组点（分离的高亮区域），也进行相同处理
       if highlightedPoints2.count > 0 {
         highlightedPoints2 = enlarge(vertex: highlightedPoints2, by: extraExpansion)
         highlightedPoints2 = expand(vertex: highlightedPoints2, innerBorder: innerBox, outerBorder: outerBox)
         rightCorners2 = removeCorner(highlightedPoints: highlightedPoints2, rightCorners: rightCorners2, containingRect: currentContainingRect)
+        // 绘制第二个高亮路径
         let highlightedPath2 = drawSmoothLines(highlightedPoints2, straightCorner: rightCorners2, alpha: 0.3*effectiveRadius, beta: 1.4*effectiveRadius)
         if let highlightedPath2 = highlightedPath2 {
-          resultingPath?.addPath(highlightedPath2)
+          resultingPath?.addPath(highlightedPath2)  // 将第二个路径合并到主路径
         }
       }
     } else if let highlightedTextRange = convert(range: highlightedRange) {
-      var highlightedRect = self.contentRect(range: highlightedTextRange)
+      // 简单矩形布局：适用于单行或简单的矩形高亮
+      var highlightedRect = self.contentRect(range: highlightedTextRange)  // 获取文本内容矩形
       if !nearEmpty(highlightedRect) {
-        highlightedRect.size.width = backgroundRect.size.width
-        highlightedRect.size.height += theme.linespace
+        // 调整高亮矩形的尺寸和位置
+        highlightedRect.size.width = backgroundRect.size.width  // 宽度占满背景
+        highlightedRect.size.height += theme.linespace          // 增加行间距
         highlightedRect.origin = NSPoint(x: backgroundRect.origin.x, y: highlightedRect.origin.y + theme.edgeInset.height - halfLinespace)
+        
+        // 如果高亮到了文本末尾，额外增加底部空间
         if highlightedRange.upperBound == (textView.string as NSString).length {
           highlightedRect.size.height += theme.edgeInset.height - halfLinespace
         }
+        
+        // 如果高亮从文本开始位置开始，额外增加顶部空间
         if highlightedRange.location - (preeditRange == .empty ? 0 : preeditRange.upperBound) <= 1 {
           if preeditRange.length == 0 {
+            // 没有预编辑文本时的调整
             highlightedRect.size.height += theme.edgeInset.height - halfLinespace
             highlightedRect.origin.y -= theme.edgeInset.height - halfLinespace
           } else {
+            // 有预编辑文本时的调整
             highlightedRect.size.height += theme.hilitedCornerRadius / 2
             highlightedRect.origin.y -= theme.hilitedCornerRadius / 2
           }
         }
 
+        // 生成矩形的顶点并进行边界调整
         var highlightedPoints = rectVertex(of: highlightedRect)
-        highlightedPoints = enlarge(vertex: highlightedPoints, by: extraExpansion)
-        highlightedPoints = expand(vertex: highlightedPoints, innerBorder: innerBox, outerBorder: outerBox)
+        highlightedPoints = enlarge(vertex: highlightedPoints, by: extraExpansion)  // 扩展顶点
+        highlightedPoints = expand(vertex: highlightedPoints, innerBorder: innerBox, outerBorder: outerBox)  // 边界限制
+        // 绘制矩形高亮路径，所有角都是圆角
         resultingPath = drawSmoothLines(highlightedPoints, straightCorner: Set(), alpha: effectiveRadius*0.3, beta: effectiveRadius*1.4)?.mutableCopy()
       } else {
-        resultingPath = nil
+        resultingPath = nil  // 空矩形不绘制
       }
     } else {
-      resultingPath = nil
+      resultingPath = nil  // 无法转换文本范围时不绘制
     }
-    return resultingPath
+    return resultingPath  // 返回最终的绘制路径
   }
 
+  // 雕刻内边距：从矩形中减去内边距和边框宽度，创建实际内容区域
+  // 这个函数确保文本内容不会绘制到边框或圆角区域
   func carveInset(rect: NSRect) -> NSRect {
-    var newRect = rect
+    var newRect = rect  // 复制原始矩形
+    // 高度和宽度都要减去两倍的（圆角半径 + 边框宽度），因为上下左右都有
     newRect.size.height -= (currentTheme.hilitedCornerRadius + currentTheme.borderWidth) * 2
     newRect.size.width -= (currentTheme.hilitedCornerRadius + currentTheme.borderWidth) * 2
+    // 起始位置要向内偏移（圆角半径 + 边框宽度）的距离
     newRect.origin.x += currentTheme.hilitedCornerRadius + currentTheme.borderWidth
     newRect.origin.y += currentTheme.hilitedCornerRadius + currentTheme.borderWidth
-    return newRect
+    return newRect  // 返回雕刻后的矩形
   }
 
+  // 创建一个等边三角形的顶点数组，用于绘制翻页按钮
+  // 三角形的顶点按逆时针方向排列：顶点在上，底边在下
   func triangle(center: NSPoint, radius: CGFloat) -> [NSPoint] {
-    [NSPoint(x: center.x, y: center.y + radius),
-     NSPoint(x: center.x + 0.5 * sqrt(3) * radius, y: center.y - 0.5 * radius),
-     NSPoint(x: center.x - 0.5 * sqrt(3) * radius, y: center.y - 0.5 * radius)]
+    [NSPoint(x: center.x, y: center.y + radius),                                    // 顶点（正上方）
+     NSPoint(x: center.x + 0.5 * sqrt(3) * radius, y: center.y - 0.5 * radius),   // 右下角顶点
+     NSPoint(x: center.x - 0.5 * sqrt(3) * radius, y: center.y - 0.5 * radius)]   // 左下角顶点
   }
 
+  // 创建翻页控制图层，绘制上一页和下一页的三角形按钮
+  // 返回包含翻页按钮的图层以及用于点击检测的路径
   func pagingLayer(theme: SquirrelTheme, preeditRect: CGRect) -> (CAShapeLayer, CGPath?, CGPath?) {
-    let layer = CAShapeLayer()
-    guard theme.showPaging && (canPageUp || canPageDown) else { return (layer, nil, nil) }
-    guard let firstCandidate = candidateRanges.first, let range = convert(range: firstCandidate) else { return (layer, nil, nil) }
-    var height = contentRect(range: range).height
+    let layer = CAShapeLayer()  // 创建主图层容器
+    // 检查是否需要显示翻页按钮：主题启用翻页显示 且 (可以上翻 或 可以下翻)
+    guard theme.showPaging && (canPageUp || canPageDown) else { 
+      return (layer, nil, nil)  // 不需要翻页时返回空图层
+    }
+    // 确保有候选字可用于计算位置
+    guard let firstCandidate = candidateRanges.first, let range = convert(range: firstCandidate) else { 
+      return (layer, nil, nil) 
+    }
+    
+    // 计算翻页按钮的基本尺寸
+    var height = contentRect(range: range).height  // 获取第一个候选字的高度作为基准
+    // 计算预编辑文本的有效高度，包括间距和圆角
     let preeditHeight = max(0, preeditRect.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2 - theme.edgeInset.height) + theme.edgeInset.height - theme.linespace / 2
-    height += theme.linespace
+    height += theme.linespace  // 增加行间距
+    
+    // 计算三角形按钮的半径，不能超过翻页区域的一半，也不能过大
     let radius = min(0.5 * theme.pagingOffset, 2 * height / 9)
+    // 计算有效的圆角半径，用于平滑三角形的边缘
     let effectiveRadius = min(theme.cornerRadius, 0.6 * radius)
+    
+    // 创建基础三角形路径，使用平滑线条处理
     guard let trianglePath = drawSmoothLines(
-      triangle(center: .zero, radius: radius),
-      straightCorner: [], alpha: 0.3 * effectiveRadius, beta: 1.4 * effectiveRadius
+      triangle(center: .zero, radius: radius),    // 在原点创建三角形
+      straightCorner: [],                         // 不保留直角，全部使用圆角
+      alpha: 0.3 * effectiveRadius,               // 圆角平滑度参数
+      beta: 1.4 * effectiveRadius                 // 圆角大小参数
     ) else {
-      return (layer, nil, nil)
+      return (layer, nil, nil)  // 如果无法创建三角形路径，返回空
     }
-    var downPath: CGPath?
-    var upPath: CGPath?
+    
+    var downPath: CGPath?  // 下一页按钮的路径
+    var upPath: CGPath?    // 上一页按钮的路径
+    
+    // 如果可以下翻页，创建向下的三角形按钮
     if canPageDown {
+      // 计算下翻按钮的位置变换：水平居中在翻页区域，垂直位置在候选字下方
       var downTransform = CGAffineTransform(translationX: 0.5 * theme.pagingOffset, y: 2 * height / 3 + preeditHeight)
-      let downLayer = shapeFromPath(path: trianglePath.copy(using: &downTransform))
-      downLayer.fillColor = theme.backgroundColor.cgColor
-      downPath = trianglePath.copy(using: &downTransform)
-      layer.addSublayer(downLayer)
+      let downLayer = shapeFromPath(path: trianglePath.copy(using: &downTransform))  // 应用变换创建图层
+      downLayer.fillColor = theme.backgroundColor.cgColor  // 设置填充颜色与背景相同
+      downPath = trianglePath.copy(using: &downTransform)  // 保存变换后的路径用于点击检测
+      layer.addSublayer(downLayer)  // 将下翻按钮添加到主图层
     }
+    
+    // 如果可以上翻页，创建向上的三角形按钮
     if canPageUp {
+      // 计算上翻按钮的位置变换：先旋转180度（指向上方），然后平移到合适位置
       var upTransform = CGAffineTransform(rotationAngle: .pi).translatedBy(x: -0.5 * theme.pagingOffset, y: -height / 3 - preeditHeight)
-      let upLayer = shapeFromPath(path: trianglePath.copy(using: &upTransform))
-      upLayer.fillColor = theme.backgroundColor.cgColor
-      upPath = trianglePath.copy(using: &upTransform)
-      layer.addSublayer(upLayer)
+      let upLayer = shapeFromPath(path: trianglePath.copy(using: &upTransform))  // 应用变换创建图层
+      upLayer.fillColor = theme.backgroundColor.cgColor  // 设置填充颜色与背景相同
+      upPath = trianglePath.copy(using: &upTransform)     // 保存变换后的路径用于点击检测
+      layer.addSublayer(upLayer)  // 将上翻按钮添加到主图层
     }
+    
+    // 返回包含所有翻页按钮的图层，以及用于点击检测的路径
     return (layer, downPath, upPath)
   }
 }
