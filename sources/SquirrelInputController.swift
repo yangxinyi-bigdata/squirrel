@@ -169,7 +169,7 @@ final class SquirrelInputController: IMKInputController {
       var keyChars = event.charactersIgnoringModifiers
       
       // 打印按键编码和字符值
-      print("keyCode: \(keyCode), keyChars: \(keyChars ?? "nil")")
+      print("15:46 keyCode: \(keyCode), keyChars: \(keyChars ?? "nil")")
       
       
       // 处理大小写相关的字符

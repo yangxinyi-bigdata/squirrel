@@ -38,8 +38,14 @@ extension NSAttributedString.Key {
 // 这个类就像一个特殊的画布，专门用来绘制输入法候选字
 final class SquirrelView: NSView {
   // 类的属性定义，就像这个视图的各种特征和工具
-  let textView: NSTextView                    // 文本视图，负责显示和管理文本内容
-  let scrollView: NSScrollView               // 滚动视图，裁切超出可见区域并显示滚动条
+  // 拆分为两个独立区域的视图
+  let preeditTextView: NSTextView
+  let preeditScrollView: NSScrollView
+  let candidateTextView: NSTextView
+  let candidateScrollView: NSScrollView
+  // 保持向后兼容的别名（默认指向候选区）
+  var textView: NSTextView { candidateTextView }
+  var scrollView: NSScrollView { candidateScrollView }
 
   private let squirrelLayoutDelegate: SquirrelLayoutDelegate  // 文本布局代理
   var candidateRanges: [NSRange] = []         // 候选字在文本中的位置范围列表
@@ -77,40 +83,56 @@ final class SquirrelView: NSView {
   // 初始化函数，创建一个新的鼠须管视图
   override init(frame frameRect: NSRect) {
     squirrelLayoutDelegate = SquirrelLayoutDelegate()  // 创建布局代理
-  textView = NSTextView(frame: frameRect)            // 创建文本视图
-  scrollView = NSScrollView(frame: frameRect)        // 创建滚动视图
+    preeditTextView = NSTextView(frame: frameRect)
+    preeditScrollView = NSScrollView(frame: frameRect)
+    candidateTextView = NSTextView(frame: frameRect)
+    candidateScrollView = NSScrollView(frame: frameRect)
     
     // 配置文本视图的属性
-    textView.drawsBackground = false                   // 不绘制背景（透明背景）
-    textView.isEditable = false                        // 不可编辑（只显示）
-    textView.isSelectable = false                      // 不可选择文本
-  textView.textLayoutManager?.delegate = squirrelLayoutDelegate  // 设置布局代理
+    for tv in [preeditTextView, candidateTextView] {
+      tv.drawsBackground = false
+      tv.isEditable = false
+      tv.isSelectable = false
+      tv.textLayoutManager?.delegate = squirrelLayoutDelegate
+    }
     
     super.init(frame: frameRect)                       // 调用父类初始化
     
     // 进一步配置
-  textContainer.lineFragmentPadding = 0              // 设置行片段内边距为0
+  candidateTextView.textContainer?.lineFragmentPadding = 0
+  preeditTextView.textContainer?.lineFragmentPadding = 0
     self.wantsLayer = true                             // 启用图层支持
     self.layer?.masksToBounds = true                   // 图层内容不超出边界
   self.autoresizingMask = [.width, .height]
 
-    // 配置滚动容器与文本视图关系
-    scrollView.drawsBackground = false
-    scrollView.hasVerticalScroller = true
-    scrollView.hasHorizontalScroller = false
-    scrollView.scrollerStyle = .overlay
-    scrollView.borderType = .noBorder
-    scrollView.autohidesScrollers = true
-  scrollView.usesPredominantAxisScrolling = true
-    scrollView.documentView = textView
+    // 配置两个滚动容器与文本视图关系
+    for sv in [preeditScrollView, candidateScrollView] {
+      sv.drawsBackground = false
+      sv.hasVerticalScroller = true
+      sv.hasHorizontalScroller = false
+      sv.scrollerStyle = .overlay
+      sv.borderType = .noBorder
+      sv.autohidesScrollers = true
+      sv.usesPredominantAxisScrolling = true
+    }
+    preeditScrollView.documentView = preeditTextView
+    candidateScrollView.documentView = candidateTextView
+
+  // 监听滚动，滚动时重绘以同步高亮背景与内容位置
+  preeditScrollView.contentView.postsBoundsChangedNotifications = true
+  candidateScrollView.contentView.postsBoundsChangedNotifications = true
+  NotificationCenter.default.addObserver(self, selector: #selector(handleClipViewBoundsChanged(_:)), name: NSView.boundsDidChangeNotification, object: preeditScrollView.contentView)
+  NotificationCenter.default.addObserver(self, selector: #selector(handleClipViewBoundsChanged(_:)), name: NSView.boundsDidChangeNotification, object: candidateScrollView.contentView)
 
     // 让文本在垂直方向可扩展，由滚动容器裁切
-    textView.isVerticallyResizable = true
-    textView.isHorizontallyResizable = false
-  if let container = textView.textContainer {
-      container.widthTracksTextView = true
-      container.heightTracksTextView = false
-  container.containerSize = NSSize(width: frameRect.width, height: CGFloat.greatestFiniteMagnitude)
+    for tv in [preeditTextView, candidateTextView] {
+      tv.isVerticallyResizable = true
+      tv.isHorizontallyResizable = false
+      if let container = tv.textContainer {
+        container.widthTracksTextView = true
+        container.heightTracksTextView = false
+        container.containerSize = NSSize(width: frameRect.width, height: CGFloat.greatestFiniteMagnitude)
+      }
     }
 
   // 注意：scrollView 不在此处添加为子视图，由面板负责将其加入层级
@@ -119,6 +141,15 @@ final class SquirrelView: NSView {
   // 必需的初始化器（从 Interface Builder 加载时使用）
   required init?(coder: NSCoder) {
     fatalError("init(coder:) has not been implemented")  // 不支持从 Storyboard 创建
+  }
+
+  deinit {
+    NotificationCenter.default.removeObserver(self)
+  }
+
+  @objc private func handleClipViewBoundsChanged(_ notification: Notification) {
+    // 滚动时请求重绘，使蓝色高亮背景与文本滚动同步
+    self.needsDisplay = true
   }
 
   // 重写坐标系属性，设置为翻转坐标系
@@ -134,9 +165,13 @@ final class SquirrelView: NSView {
   }
 
   // 当前滚动偏移（文档坐标 -> 可见坐标）
-  var scrollOffset: NSPoint {
-    return scrollView.contentView.bounds.origin
+  var scrollOffset: NSPoint { // 兼容旧逻辑，等同候选区
+    return candidateScrollView.contentView.bounds.origin
   }
+  var candidateScrollOffset: NSPoint { candidateScrollView.contentView.bounds.origin }
+  var preeditScrollOffset: NSPoint { preeditScrollView.contentView.bounds.origin }
+  private var preeditFrameOriginY: CGFloat { preeditScrollView.frame.origin.y }
+  private var candidateFrameOriginY: CGFloat { candidateScrollView.frame.origin.y }
 
   // 将 NSRange 转换为 NSTextRange 的工具函数
   // NSRange 是旧式的范围表示，NSTextRange 是新式的范围表示
@@ -144,36 +179,34 @@ final class SquirrelView: NSView {
     guard range != .empty else { return nil }  // 如果是空范围，返回 nil
     
     // 计算起始位置
-    guard let startLocation = textLayoutManager.location(textLayoutManager.documentRange.location, offsetBy: range.location) else { return nil }
+    guard let startLocation = candidateTextView.textLayoutManager?.location(candidateTextView.textLayoutManager!.documentRange.location, offsetBy: range.location) else { return nil }
     // 计算结束位置
-    guard let endLocation = textLayoutManager.location(startLocation, offsetBy: range.length) else { return nil }
+    guard let endLocation = candidateTextView.textLayoutManager?.location(startLocation, offsetBy: range.length) else { return nil }
     // 创建并返回文本范围
+    return NSTextRange(location: startLocation, end: endLocation)
+  }
+
+  // 新增：专用于预编辑区的转换
+  func convertPreedit(range: NSRange) -> NSTextRange? {
+    guard range != .empty else { return nil }
+    guard let startLocation = preeditTextView.textLayoutManager?.location(preeditTextView.textLayoutManager!.documentRange.location, offsetBy: range.location) else { return nil }
+    guard let endLocation = preeditTextView.textLayoutManager?.location(startLocation, offsetBy: range.length) else { return nil }
     return NSTextRange(location: startLocation, end: endLocation)
   }
 
   // 获取包含整个内容的矩形区域，计算成本较高
   // 这个函数就像测量一张纸上所有文字占用的总面积
   var contentRect: NSRect {
-    var ranges = candidateRanges  // 从候选字范围开始
-    if preeditRange.length > 0 {
-      ranges.append(preeditRange)  // 如果有预编辑文本，也加进来
+    var rect: NSRect = .zero
+    if let tlm = candidateTextView.textLayoutManager {
+      let r = contentRect(range: tlm.documentRange)
+      if r.width.isFinite && r.height.isFinite { rect = rect.union(r) }
     }
-    
-    // 初始化边界值，用于寻找最小和最大的坐标
-    // swiftlint:disable:next identifier_name
-    var x0 = CGFloat.infinity, x1 = -CGFloat.infinity, y0 = CGFloat.infinity, y1 = -CGFloat.infinity
-    
-    // 遍历所有范围，找出它们的边界
-    for range in ranges {
-      if let textRange = convert(range: range) {
-        let rect = contentRect(range: textRange)  // 获取这个范围的矩形
-        x0 = min(rect.minX, x0)  // 更新最小 x 坐标
-        x1 = max(rect.maxX, x1)  // 更新最大 x 坐标
-        y0 = min(rect.minY, y0)  // 更新最小 y 坐标
-        y1 = max(rect.maxY, y1)  // 更新最大 y 坐标
-      }
+    if let tlm = preeditTextView.textLayoutManager {
+      let r = contentRectPreedit(range: tlm.documentRange)
+      if r.width.isFinite && r.height.isFinite { rect = rect.union(r) }
     }
-    return NSRect(x: x0, y: y0, width: x1-x0, height: y1-y0)  // 返回包含所有内容的矩形
+    return rect
   }
   // 获取包含指定文本范围的矩形，计算成本较高
   // 这个函数会先转换为字形范围，然后计算矩形边界
@@ -183,10 +216,11 @@ final class SquirrelView: NSView {
     var x0 = CGFloat.infinity, x1 = -CGFloat.infinity, y0 = CGFloat.infinity, y1 = -CGFloat.infinity
     
     // 枚举文本段，计算每个段的矩形
-    textLayoutManager.enumerateTextSegments(in: range, type: .standard, options: .rangeNotRequired) { _, rect, _, _ in
+    candidateTextView.textLayoutManager?.enumerateTextSegments(in: range, type: .standard, options: .rangeNotRequired) { _, rect, _, _ in
       var rect = rect
-      rect.origin.x -= scrollOffset.x
-      rect.origin.y -= scrollOffset.y
+      rect.origin.x -= candidateScrollOffset.x
+      rect.origin.y -= candidateScrollOffset.y
+      rect.origin.y += candidateFrameOriginY
       x0 = min(rect.minX, x0)  // 更新边界
       x1 = max(rect.maxX, x1)
       y0 = min(rect.minY, y0)
@@ -194,6 +228,23 @@ final class SquirrelView: NSView {
       return true  // 继续枚举
     }
     return NSRect(x: x0, y: y0, width: x1-x0, height: y1-y0)  // 返回包含范围的矩形
+  }
+
+  // 新增：预编辑区域的 contentRect
+  func contentRectPreedit(range: NSTextRange) -> NSRect {
+    var x0 = CGFloat.infinity, x1 = -CGFloat.infinity, y0 = CGFloat.infinity, y1 = -CGFloat.infinity
+    preeditTextView.textLayoutManager?.enumerateTextSegments(in: range, type: .standard, options: .rangeNotRequired) { _, rect, _, _ in
+      var rect = rect
+      rect.origin.x -= preeditScrollOffset.x
+      rect.origin.y -= preeditScrollOffset.y
+      rect.origin.y += preeditFrameOriginY
+      x0 = min(rect.minX, x0)
+      x1 = max(rect.maxX, x1)
+      y0 = min(rect.minY, y0)
+      y1 = max(rect.maxY, y1)
+      return true
+    }
+    return NSRect(x: x0, y: y0, width: x1-x0, height: y1-y0)
   }
 
   // 触发视图重绘的函数，会调用 drawRect 方法
@@ -229,9 +280,9 @@ final class SquirrelView: NSView {
 
     // 绘制预编辑文本矩形区域
     var preeditRect = NSRect.zero
-    if preeditRange.length > 0, let preeditTextRange = convert(range: preeditRange) {
+  if preeditRange.length > 0, let preeditTextRange = convertPreedit(range: preeditRange) {
       // 计算预编辑文本的显示区域
-      preeditRect = contentRect(range: preeditTextRange)
+  preeditRect = contentRectPreedit(range: preeditTextRange)
       preeditRect.size.width = backgroundRect.size.width  // 宽度占满背景区域
       // 调整高度，包含边距和行间距
       preeditRect.size.height += theme.edgeInset.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2
@@ -261,12 +312,12 @@ final class SquirrelView: NSView {
       if i == hilightedIndex {
         // 绘制高亮（选中）的候选字背景
         if candidate.length > 0 && theme.highlightedBackColor != nil {
-          highlightedPath = drawPath(highlightedRange: candidate, backgroundRect: backgroundRect, preeditRect: preeditRect, containingRect: containingRect, extraExpansion: 0)?.mutableCopy()
+          highlightedPath = drawPathCandidate(highlightedRange: candidate, backgroundRect: backgroundRect, preeditRect: preeditRect, containingRect: containingRect, extraExpansion: 0)?.mutableCopy()
         }
       } else {
         // 绘制其他候选字的背景
         if candidate.length > 0 && theme.candidateBackColor != nil {
-          let candidatePath = drawPath(highlightedRange: candidate, backgroundRect: backgroundRect, preeditRect: preeditRect,
+          let candidatePath = drawPathCandidate(highlightedRange: candidate, backgroundRect: backgroundRect, preeditRect: preeditRect,
                                        containingRect: containingRect, extraExpansion: theme.surroundingExtraExpansion)
           // 如果候选字路径容器不存在，创建一个
           if candidatePaths == nil {
@@ -281,7 +332,7 @@ final class SquirrelView: NSView {
     }
 
     // Draw highlighted part of preedit text
-    if (highlightedPreeditRange.length > 0) && (theme.highlightedPreeditColor != nil), let highlightedPreeditTextRange = convert(range: highlightedPreeditRange) {
+  if (highlightedPreeditRange.length > 0) && (theme.highlightedPreeditColor != nil), let highlightedPreeditTextRange = convertPreedit(range: highlightedPreeditRange) {
       var innerBox = preeditRect
       innerBox.size.width -= (theme.edgeInset.width + 1) * 2
       innerBox.origin.x += theme.edgeInset.width + 1
@@ -297,7 +348,7 @@ final class SquirrelView: NSView {
       outerBox.origin.x += max(0, theme.hilitedCornerRadius + theme.borderLineWidth) / 2
       outerBox.origin.y += max(0, theme.hilitedCornerRadius + theme.borderLineWidth) / 2
 
-      let (leadingRect, bodyRect, trailingRect) = multilineRects(forRange: highlightedPreeditTextRange, extraSurounding: 0, bounds: outerBox)
+  let (leadingRect, bodyRect, trailingRect) = multilineRectsPreedit(forRange: highlightedPreeditTextRange, extraSurounding: 0, bounds: outerBox)
       var (highlightedPoints, highlightedPoints2, rightCorners, rightCorners2) = linearMultilineFor(body: bodyRect, leading: leadingRect, trailing: trailingRect)
 
       containingRect = carveInset(rect: preeditRect)
@@ -455,44 +506,49 @@ final class SquirrelView: NSView {
     
     // 检查是否点击在候选窗口内部
     if let path = shape.path, path.contains(clickPoint) {
-      // 计算相对于文本视图的点击坐标，就像把全局坐标转换为局部坐标
-      var point = NSPoint(x: clickPoint.x - textView.textContainerInset.width - currentTheme.pagingOffset,
-                          y: clickPoint.y - textView.textContainerInset.height)
-      // 加回滚动偏移以对齐文档坐标
-      point.x += scrollView.contentView.bounds.origin.x
-      point.y += scrollView.contentView.bounds.origin.y
-      
-      // 找到包含点击点的文本布局片段
-      let fragment = textLayoutManager.textLayoutFragment(for: point)
-      if let fragment = fragment {
-        // 转换为片段内的相对坐标
-        point = NSPoint(x: point.x - fragment.layoutFragmentFrame.minX,
-                        y: point.y - fragment.layoutFragmentFrame.minY)
-        // 计算在整个文档中的字符索引位置
-        index = textLayoutManager.offset(from: textLayoutManager.documentRange.location, to: fragment.rangeInElement.location)
-        
-        // 遍历该片段中的每一行文本
-        for lineFragment in fragment.textLineFragments where lineFragment.typographicBounds.contains(point) {
-          // 转换为行内的相对坐标
-          point = NSPoint(x: point.x - lineFragment.typographicBounds.minX,
-                          y: point.y - lineFragment.typographicBounds.minY)
-          // 获取在该行中的字符索引
-          index += lineFragment.characterIndex(for: point)
-          
-          // 判断点击的是预编辑区域还是候选字区域
-          if index >= preeditRange.location && index < preeditRange.upperBound {
-            preeditIndex = index  // 点击了预编辑文本
-          } else {
-            // 检查是否点击了某个候选字
+      let theme = currentTheme
+      // 优先判定预编辑区域
+      if preeditScrollView.frame.contains(clickPoint), let tlm = preeditTextView.textLayoutManager {
+        var point = NSPoint(x: clickPoint.x - preeditScrollView.frame.origin.x - preeditTextView.textContainerInset.width - theme.pagingOffset,
+                            y: clickPoint.y - preeditScrollView.frame.origin.y - preeditTextView.textContainerInset.height)
+        point.x += preeditScrollOffset.x
+        point.y += preeditScrollOffset.y
+        if let fragment = tlm.textLayoutFragment(for: point) {
+          var local = NSPoint(x: point.x - fragment.layoutFragmentFrame.minX,
+                              y: point.y - fragment.layoutFragmentFrame.minY)
+          index = tlm.offset(from: tlm.documentRange.location, to: fragment.rangeInElement.location)
+          for lineFragment in fragment.textLineFragments where lineFragment.typographicBounds.contains(local) {
+            local = NSPoint(x: local.x - lineFragment.typographicBounds.minX,
+                            y: local.y - lineFragment.typographicBounds.minY)
+            index += lineFragment.characterIndex(for: local)
+            if index >= preeditRange.location && index < preeditRange.upperBound {
+              preeditIndex = index
+            }
+            break
+          }
+        }
+      } else if candidateScrollView.frame.contains(clickPoint), let tlm = candidateTextView.textLayoutManager {
+        var point = NSPoint(x: clickPoint.x - candidateScrollView.frame.origin.x - candidateTextView.textContainerInset.width - theme.pagingOffset,
+                            y: clickPoint.y - candidateScrollView.frame.origin.y - candidateTextView.textContainerInset.height)
+        point.x += candidateScrollOffset.x
+        point.y += candidateScrollOffset.y
+        if let fragment = tlm.textLayoutFragment(for: point) {
+          var local = NSPoint(x: point.x - fragment.layoutFragmentFrame.minX,
+                              y: point.y - fragment.layoutFragmentFrame.minY)
+          index = tlm.offset(from: tlm.documentRange.location, to: fragment.rangeInElement.location)
+          for lineFragment in fragment.textLineFragments where lineFragment.typographicBounds.contains(local) {
+            local = NSPoint(x: local.x - lineFragment.typographicBounds.minX,
+                            y: local.y - lineFragment.typographicBounds.minY)
+            index += lineFragment.characterIndex(for: local)
             for i in 0..<candidateRanges.count {
               let range = candidateRanges[i]
               if index >= range.location && index < range.upperBound {
-                candidateIndex = i  // 找到被点击的候选字
+                candidateIndex = i
                 break
               }
             }
+            break
           }
-          break  // 找到匹配的行后跳出循环
         }
       }
     }
@@ -682,6 +738,76 @@ private extension SquirrelView {
     }
 
     return (leadingRect, bodyRect, trailingRect)  // 返回三个区域
+  }
+
+  // 预编辑区域的多行矩形计算，使用预编辑文本系统与其滚动偏移
+  func multilineRectsPreedit(forRange range: NSTextRange, extraSurounding: Double, bounds: NSRect) -> (NSRect, NSRect, NSRect) {
+    let edgeInset = currentTheme.edgeInset
+    var lineRects = [NSRect]()
+    preeditTextView.textLayoutManager?.enumerateTextSegments(in: range, type: .standard, options: [.rangeNotRequired]) { _, rect, _, _ in
+      var newRect = rect
+      newRect.origin.x -= preeditScrollOffset.x
+      newRect.origin.y -= preeditScrollOffset.y
+      newRect.origin.x += edgeInset.width
+      newRect.origin.y += edgeInset.height
+      newRect.size.height += currentTheme.preeditLinespace
+      newRect.origin.y -= currentTheme.preeditLinespace / 2
+      lineRects.append(newRect)
+      return true
+    }
+
+    var leadingRect = NSRect.zero
+    var bodyRect = NSRect.zero
+    var trailingRect = NSRect.zero
+    if lineRects.count == 1 {
+      bodyRect = lineRects[0]
+    } else if lineRects.count == 2 {
+      leadingRect = lineRects[0]
+      trailingRect = lineRects[1]
+    } else if lineRects.count > 2 {
+      leadingRect = lineRects[0]
+      trailingRect = lineRects[lineRects.count-1]
+      var x0 = CGFloat.infinity, x1 = -CGFloat.infinity, y0 = CGFloat.infinity, y1 = -CGFloat.infinity
+      for i in 1..<(lineRects.count-1) {
+        let rect = lineRects[i]
+        x0 = min(rect.minX, x0)
+        x1 = max(rect.maxX, x1)
+        y0 = min(rect.minY, y0)
+        y1 = max(rect.maxY, y1)
+      }
+      y0 = min(leadingRect.maxY, y0)
+      y1 = max(trailingRect.minY, y1)
+      bodyRect = NSRect(x: x0, y: y0, width: x1-x0, height: y1-y0)
+    }
+
+    if extraSurounding > 0 {
+      if nearEmpty(leadingRect) && nearEmpty(trailingRect) {
+        bodyRect = expandHighlightWidth(rect: bodyRect, extraSurrounding: extraSurounding)
+      } else {
+        if !(nearEmpty(leadingRect)) {
+          leadingRect = expandHighlightWidth(rect: leadingRect, extraSurrounding: extraSurounding)
+        }
+        if !(nearEmpty(trailingRect)) {
+          trailingRect = expandHighlightWidth(rect: trailingRect, extraSurrounding: extraSurounding)
+        }
+      }
+    }
+
+    if !nearEmpty(leadingRect) && !nearEmpty(trailingRect) {
+      leadingRect.size.width = bounds.maxX - leadingRect.origin.x
+      trailingRect.size.width = trailingRect.maxX - bounds.minX
+      trailingRect.origin.x = bounds.minX
+      if !nearEmpty(bodyRect) {
+        bodyRect.size.width = bounds.size.width
+        bodyRect.origin.x = bounds.origin.x
+      } else {
+        let diff = trailingRect.minY - leadingRect.maxY
+        leadingRect.size.height += diff / 2
+        trailingRect.size.height += diff / 2
+        trailingRect.origin.y -= diff / 2
+      }
+    }
+    return (leadingRect, bodyRect, trailingRect)
   }
 
   // 根据multilineRectForRange得到的3个矩形，计算包含指定文本范围的多边形顶点
@@ -876,7 +1002,7 @@ private extension SquirrelView {
 
   // 绘制高亮路径的核心函数，处理候选字和预编辑文本的背景高亮
   // 这是整个高亮系统最复杂的函数，需要考虑多种布局模式和边界情况
-  func drawPath(highlightedRange: NSRange, backgroundRect: NSRect, preeditRect: NSRect, containingRect: NSRect, extraExpansion: Double) -> CGPath? {
+  func drawPathCandidate(highlightedRange: NSRange, backgroundRect: NSRect, preeditRect: NSRect, containingRect: NSRect, extraExpansion: Double) -> CGPath? {
     let theme = currentTheme        // 获取当前主题
     let resultingPath: CGMutablePath?  // 最终的绘制路径
 
@@ -919,7 +1045,7 @@ private extension SquirrelView {
     let effectiveRadius = max(0, theme.hilitedCornerRadius + 2 * extraExpansion / theme.hilitedCornerRadius * max(0, theme.cornerRadius - theme.hilitedCornerRadius))
 
     // 检查是否使用线性布局模式（支持多行高亮的复杂形状）
-    if theme.linear, let highlightedTextRange = convert(range: highlightedRange) {
+  if theme.linear, let highlightedTextRange = convert(range: highlightedRange) {
       // 线性布局：支持复杂的多行高亮形状，如L形、T形等
       let (leadingRect, bodyRect, trailingRect) = multilineRects(forRange: highlightedTextRange, extraSurounding: separatorWidth, bounds: outerBox)
       var (highlightedPoints, highlightedPoints2, rightCorners, rightCorners2) = linearMultilineFor(body: bodyRect, leading: leadingRect, trailing: trailingRect)
@@ -942,9 +1068,9 @@ private extension SquirrelView {
           resultingPath?.addPath(highlightedPath2)  // 将第二个路径合并到主路径
         }
       }
-    } else if let highlightedTextRange = convert(range: highlightedRange) {
+  } else if let highlightedTextRange = convert(range: highlightedRange) {
       // 简单矩形布局：适用于单行或简单的矩形高亮
-      var highlightedRect = self.contentRect(range: highlightedTextRange)  // 获取文本内容矩形
+  var highlightedRect = self.contentRect(range: highlightedTextRange)  // 获取文本内容矩形
       if !nearEmpty(highlightedRect) {
         // 调整高亮矩形的尺寸和位置
         highlightedRect.size.width = backgroundRect.size.width  // 宽度占满背景

@@ -189,6 +189,8 @@ final class SquirrelTheme {
 
   // 候选区最大可见高度（pt）。为 nil 表示不限制，仅受屏幕尺寸限制。
   private(set) var maxCandidateHeight: CGFloat?
+  // 预编辑区最大可见高度（pt）。为 nil 表示不限制，仅受屏幕尺寸限制。
+  private(set) var maxPreeditHeight: CGFloat?
 
   // 定义字体相关的属性
   // 就像是为不同的文本选择不同的"笔迹"
@@ -410,8 +412,9 @@ final class SquirrelTheme {
     translucency ?= config.getBool("style/translucency")                                    // 是否半透明效果
     mutualExclusive ?= config.getBool("style/mutual_exclusive")                              // 是否互斥显示（同时只显示一个）
     memorizeSize ?= config.getBool("style/memorize_size")                                    // 是否记住窗口大小
-    showPaging ?= config.getBool("style/show_paging")                                        // 是否显示分页信息
-    maxCandidateHeight ?= config.getDouble("style/max_candidate_height")                     // 候选区最大可见高度
+  showPaging ?= config.getBool("style/show_paging")                                        // 是否显示分页信息
+  maxCandidateHeight ?= config.getDouble("style/max_candidate_height")                     // 候选区最大可见高度
+  maxPreeditHeight ?= config.getDouble("style/max_preedit_height")                         // 预编辑区最大可见高度
 
     // 加载消息和格式相关的设置
     // 这些设置控制信息的显示方式，就像是"标签和说明书的样式"
@@ -487,8 +490,9 @@ final class SquirrelTheme {
         inlineCandidate ?= config.getBool("\(prefix)/inline_candidate")                              // 是否内联候选词
         translucency ?= config.getBool("\(prefix)/translucency")                                    // 是否半透明
         mutualExclusive ?= config.getBool("\(prefix)/mutual_exclusive")                              // 是否互斥显示
-        showPaging ?= config.getBool("\(prefix)/show_paging")                                        // 是否显示分页
-        maxCandidateHeight ?= config.getDouble("\(prefix)/max_candidate_height")                     // 候选区最大可见高度
+  showPaging ?= config.getBool("\(prefix)/show_paging")                                        // 是否显示分页
+  maxCandidateHeight ?= config.getDouble("\(prefix)/max_candidate_height")                     // 候选区最大可见高度
+  maxPreeditHeight ?= config.getDouble("\(prefix)/max_preedit_height")                         // 预编辑区最大可见高度
         candidateFormat ?= config.getString("\(prefix)/candidate_format")                           // 候选词格式
         
         // 重新加载字体相关设置（使用配色方案中的值，如果存在的话）
