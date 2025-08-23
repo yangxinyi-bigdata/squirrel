@@ -1077,7 +1077,7 @@ final class SquirrelView: NSView {
       let theme = currentTheme
       // 优先判定预编辑区域
       if preeditScrollView.frame.contains(clickPoint), let tlm = preeditTextView.textLayoutManager {
-        var point = NSPoint(x: clickPoint.x - preeditScrollView.frame.origin.x - preeditTextView.textContainerInset.width - theme.pagingOffset,
+        var point = NSPoint(x: clickPoint.x - preeditScrollView.frame.origin.x - preeditTextView.textContainerInset.width,
                             y: clickPoint.y - preeditScrollView.frame.origin.y - preeditTextView.textContainerInset.height)
         point.x += preeditScrollOffset.x
         point.y += preeditScrollOffset.y
@@ -1096,26 +1096,56 @@ final class SquirrelView: NSView {
           }
         }
       } else if candidateScrollView.frame.contains(clickPoint), let tlm = candidateTextView.textLayoutManager {
-        var point = NSPoint(x: clickPoint.x - candidateScrollView.frame.origin.x - candidateTextView.textContainerInset.width - theme.pagingOffset,
-                            y: clickPoint.y - candidateScrollView.frame.origin.y - candidateTextView.textContainerInset.height)
-        point.x += candidateScrollOffset.x
-        point.y += candidateScrollOffset.y
-        if let fragment = tlm.textLayoutFragment(for: point) {
-          var local = NSPoint(x: point.x - fragment.layoutFragmentFrame.minX,
-                              y: point.y - fragment.layoutFragmentFrame.minY)
-          index = tlm.offset(from: tlm.documentRange.location, to: fragment.rangeInElement.location)
-          for lineFragment in fragment.textLineFragments where lineFragment.typographicBounds.contains(local) {
-            local = NSPoint(x: local.x - lineFragment.typographicBounds.minX,
-                            y: local.y - lineFragment.typographicBounds.minY)
-            index += lineFragment.characterIndex(for: local)
-            for i in 0..<candidateRanges.count {
-              let range = candidateRanges[i]
-              if index >= range.location && index < range.upperBound {
+        // 先进行一次与绘制几何一致的命中测试，避免段前/段后间距把点归属到相邻行导致 off-by-one
+        let halfLinespace = currentTheme.linespace / 2
+        // 与绘制时一致：用 preedit clipView 的底边作为 seam，并进行设备像素对齐
+        let clip = preeditScrollView.contentView
+        let clipRectInSelf = clip.convert(clip.bounds, to: self)
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+        let seamTop = (clipRectInSelf.maxY * scale).rounded() / scale
+        let svX = candidateScrollView.frame.origin.x
+        let svW = candidateScrollView.frame.width
+        // 仅当点在候选滚动区域的水平范围内时才测试
+        if clickPoint.x >= svX && clickPoint.x <= svX + svW {
+          for i in 0..<candidateRanges.count {
+            if let tr = convert(range: candidateRanges[i]) {
+              var r = contentRect(range: tr) // 已在 self 坐标系，含 frame.origin.y 与 scrollOffset 修正
+              // 将矩形扩展为与高亮绘制一致的高度与顶部偏移：+linespace 高度，-halfLinespace 顶部
+              r.size.height += currentTheme.linespace
+              r.origin.y = r.origin.y + seamTop - halfLinespace
+              // 宽度用候选滚动区域，确保命中判定覆盖整行
+              r.origin.x = svX
+              r.size.width = svW
+              if r.contains(clickPoint) {
                 candidateIndex = i
                 break
               }
             }
-            break
+          }
+        }
+        // 若几何命中未命中，则回退到文本系统的精确映射
+        if candidateIndex == nil {
+          var point = NSPoint(x: clickPoint.x - candidateScrollView.frame.origin.x - candidateTextView.textContainerInset.width,
+                              y: clickPoint.y - candidateScrollView.frame.origin.y - candidateTextView.textContainerInset.height)
+          point.x += candidateScrollOffset.x
+          point.y += candidateScrollOffset.y
+          if let fragment = tlm.textLayoutFragment(for: point) {
+            var local = NSPoint(x: point.x - fragment.layoutFragmentFrame.minX,
+                                y: point.y - fragment.layoutFragmentFrame.minY)
+            index = tlm.offset(from: tlm.documentRange.location, to: fragment.rangeInElement.location)
+            for lineFragment in fragment.textLineFragments where lineFragment.typographicBounds.contains(local) {
+              local = NSPoint(x: local.x - lineFragment.typographicBounds.minX,
+                              y: local.y - lineFragment.typographicBounds.minY)
+              index += lineFragment.characterIndex(for: local)
+              for i in 0..<candidateRanges.count {
+                let range = candidateRanges[i]
+                if index >= range.location && index < range.upperBound {
+                  candidateIndex = i
+                  break
+                }
+              }
+              break
+            }
           }
         }
       }
