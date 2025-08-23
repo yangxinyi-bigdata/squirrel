@@ -4,6 +4,53 @@
 //
 //  Created by Leo Liu on 5/10/24.
 //
+// ========================================================================
+// 🖼️ 松鼠输入法面板系统 - SquirrelPanel 核心模块
+// ========================================================================
+//
+// 📋 模块功能概述：
+// 这是松鼠输入法的"用户界面指挥中心"，负责管理整个候选字窗口的显示、交互和生命周期。
+// 就像一个剧院的舞台管理员，它协调所有的演员（文本、按钮、背景）来呈现完美的演出。
+//
+// 🏗️ 核心职责：
+// 1. 📺 窗口管理：创建、显示、隐藏、定位候选字面板窗口
+// 2. 🔄 数据处理：接收librime的输出并转换为可显示的富文本
+// 3. 🎮 事件处理：处理鼠标点击、悬停、滚轮等用户交互
+// 4. 📐 布局计算：根据内容和主题计算窗口大小和位置
+// 5. 🎨 样式应用：应用SquirrelTheme提供的样式到文本和界面
+// 6. 📄 分页控制：处理候选字的翻页显示
+// 7. 💬 状态消息：显示输入法状态提示信息
+//
+// 🔄 主要工作流程：
+// 1. 接收来自SquirrelInputController的输入数据
+// 2. 使用SquirrelTheme的样式创建富文本
+// 3. 通过SquirrelView渲染界面元素
+// 4. 计算窗口位置避免超出屏幕边界
+// 5. 处理用户交互并反馈给输入控制器
+//
+// 🎯 关键特性：
+// - 支持垂直/水平两种布局模式
+// - 智能窗口定位（避免遮挡、跟随光标）
+// - 平滑的鼠标交互体验
+// - 滚轮翻页支持
+// - 半透明背景效果
+// - 内联显示模式
+// - 记忆窗口大小功能
+//
+// 📱 用户交互处理：
+// - 鼠标点击选择候选字
+// - 鼠标悬停高亮预览
+// - 滚轮/触摸板翻页
+// - 点击预编辑文本移动光标
+//
+// 🎯 在输入法架构中的位置：
+// SquirrelInputController → SquirrelPanel → SquirrelView + SquirrelTheme
+// (输入逻辑控制)        (界面协调)      (渲染+样式)
+//
+// ========================================================================
+
+// ========== 🔧 调试配置 ==========
+private let DEBUG_KEEP_PANEL_VISIBLE = true  // 调试时保持面板可见，不会因为鼠标移开而隐藏
 
 // 导入 AppKit，这是 macOS 应用界面开发的核心库
 // 就像导入一个画画工具箱，里面有各种绘制界面的工具
@@ -221,6 +268,12 @@ final class SquirrelPanel: NSPanel {
 
   // 隐藏面板的方法
   func hide() {
+    // 🔧 调试模式：阻止面板隐藏
+    if DEBUG_KEEP_PANEL_VISIBLE {
+      print("🔧 [调试模式] 阻止面板隐藏，保持可见状态")
+      return
+    }
+    
     statusTimer?.invalidate()  // 取消状态消息定时器
     statusTimer = nil
     orderOut(nil)             // 将面板从屏幕上移除
@@ -379,24 +432,51 @@ final class SquirrelPanel: NSPanel {
   candidateText.append(line)
     }
 
-    // 文本处理完成！
-    // 将处理好的富文本设置到文本视图中
-  // 同步到两个区域
-  view.preeditTextView.textContentStorage?.attributedString = preeditText
-  view.preeditTextView.textStorage?.setAttributedString(preeditText)
-  view.candidateTextView.textContentStorage?.attributedString = candidateText
-  view.candidateTextView.textStorage?.setAttributedString(candidateText)
-  // 触发布局
-  view.preeditTextView.textLayoutManager?.ensureLayout(for: view.preeditTextView.textLayoutManager!.documentRange)
-  view.candidateTextView.textLayoutManager?.ensureLayout(for: view.candidateTextView.textLayoutManager!.documentRange)
-  view.preeditTextView.layoutSubtreeIfNeeded()
-  view.candidateTextView.layoutSubtreeIfNeeded()
-  // 设置文本布局方向（垂直或水平）
-  view.preeditTextView.setLayoutOrientation(vertical ? .vertical : .horizontal)
-  view.candidateTextView.setLayoutOrientation(vertical ? .vertical : .horizontal)
-    // 绘制视图，包括候选字高亮、翻页按钮等
+    // 📝 文本处理完成！现在开始将处理好的富文本显示到界面上
+    
+    // 🔄 步骤1: 将处理好的富文本设置到文本视图中
+    // 在 macOS 的文本系统中，需要同时设置两个属性来确保文本正确显示
+    // textContentStorage: 新的文本存储系统（iOS 15/macOS 12 引入）
+    // textStorage: 传统的文本存储系统（向后兼容）
+    
+    // 设置预编辑文本（用户正在输入但还未确认的文字，比如拼音"zhong"）
+    view.preeditTextView.textContentStorage?.attributedString = preeditText
+    view.preeditTextView.textStorage?.setAttributedString(preeditText)
+    
+    // 设置候选字文本（输入法提供的备选词汇，比如"中"、"钟"、"终"等）
+    view.candidateTextView.textContentStorage?.attributedString = candidateText
+    view.candidateTextView.textStorage?.setAttributedString(candidateText)
+    
+    // 🎯 步骤2: 强制触发文本布局计算
+    // 当文本内容改变后，系统不会立即重新计算布局，需要手动触发
+    // ensureLayout: 确保指定范围内的文本已经完成布局计算
+    // documentRange: 整个文档的范围（从开头到结尾）
+    view.preeditTextView.textLayoutManager?.ensureLayout(for: view.preeditTextView.textLayoutManager!.documentRange)
+    view.candidateTextView.textLayoutManager?.ensureLayout(for: view.candidateTextView.textLayoutManager!.documentRange)
+    
+    // layoutSubtreeIfNeeded: 如果需要，重新布局整个视图子树
+    // 这确保所有子视图的位置和大小都是最新的
+    view.preeditTextView.layoutSubtreeIfNeeded()
+    view.candidateTextView.layoutSubtreeIfNeeded()
+    
+    // 📐 步骤3: 设置文本布局方向
+    // vertical 变量决定是垂直显示还是水平显示
+    // .vertical: 文字从上到下排列（传统中文竖排）
+    // .horizontal: 文字从左到右排列（现代横排）
+    view.preeditTextView.setLayoutOrientation(vertical ? .vertical : .horizontal)
+    view.candidateTextView.setLayoutOrientation(vertical ? .vertical : .horizontal)
+    
+    // 🎨 步骤4: 绘制完整的输入法面板视图
+    // 这个函数会绘制候选字高亮效果、翻页按钮、边框等所有视觉元素
+    // candidateRanges: 每个候选字在文本中的位置范围
+    // hilightedIndex: 当前高亮（选中）的候选字索引
+    // preeditRange: 预编辑文本的范围
+    // highlightedPreeditRange: 预编辑文本中需要高亮的部分
+    // canPageUp/canPageDown: 是否可以向上/向下翻页
     view.drawView(candidateRanges: candidateRanges, hilightedIndex: index, preeditRange: preeditRange, highlightedPreeditRange: highlightedPreeditRange, canPageUp: page > 0, canPageDown: !lastPage)
-    // 显示面板
+    
+    // 🚀 步骤5: 最终显示面板到屏幕上
+    // 计算面板位置、设置大小、应用主题样式，并将面板显示给用户
     show()
   }
 
@@ -508,8 +588,8 @@ private extension SquirrelPanel {
 
   if vertical {
       // 垂直模式的面板大小和位置计算
-      var width = contentRect.height + theme.edgeInset.height * 2
-      var height = contentRect.width + theme.edgeInset.width * 2
+      let width = contentRect.height + theme.edgeInset.height * 2
+      let height = contentRect.width + theme.edgeInset.width * 2
       panelRect.size = NSSize(width: min(0.95 * screenRect.width, width),
                               height: min(0.95 * screenRect.height, height) + theme.pagingOffset)
 
@@ -531,9 +611,34 @@ private extension SquirrelPanel {
       let width = contentRect.width + theme.edgeInset.width * 2
       // 预编辑高度（与 draw 中计算保持一致）
       var preeditDocHeight: CGFloat = 0
-      if view.preeditRange.length > 0, let pr = view.convertPreedit(range: view.preeditRange) {
-        preeditDocHeight = view.contentRectPreedit(range: pr).height
+      
+      // ========== 🔍 调试信息：预编辑范围检查 ==========
+      print("🔍 [SquirrelPanel.show] 预编辑范围调试:")
+      print("   📝 view.preeditRange: \(view.preeditRange)")
+      print("   📏 preeditRange.length: \(view.preeditRange.length)")
+      print("   📍 preeditRange.location: \(view.preeditRange.location)")
+      
+      // 分步骤检查条件
+      let lengthCheck = view.preeditRange.length > 0
+      print("   ✅ 长度检查 (length > 0): \(lengthCheck)")
+      
+      if lengthCheck {
+        print("   🔄 尝试转换预编辑范围...")
+        if let pr = view.convertPreedit(range: view.preeditRange) {
+          print("   ✅ 范围转换成功: \(pr)")
+          let calculatedHeight = view.contentRectPreedit(range: pr).height
+          print("   📐 计算高度: \(calculatedHeight)")
+          preeditDocHeight = calculatedHeight
+        } else {
+          print("   ❌ 范围转换失败")
+        }
+      } else {
+        print("   ⏭️ 跳过：预编辑范围长度为0")
       }
+      
+      print("   🏁 最终 preeditDocHeight: \(preeditDocHeight)")
+      print("   ----------------------------------------")
+      
       let preeditPadding = (view.preeditRange.length > 0)
         ? (theme.edgeInset.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2)
         : 0
@@ -549,7 +654,7 @@ private extension SquirrelPanel {
       }
       let candidateNaturalHeight = candidateDocHeight + theme.edgeInset.height * 2
       let candidateFrameHeightCapped = min(candidateNaturalHeight, theme.maxCandidateHeight ?? candidateNaturalHeight)
-      var height = preeditFrameHeightCapped + candidateFrameHeightCapped
+      let height = preeditFrameHeightCapped + candidateFrameHeightCapped
       panelRect.size = NSSize(width: min(0.95 * screenRect.width, width),
                               height: min(0.95 * screenRect.height, height))
       panelRect.size.width += theme.pagingOffset
@@ -619,9 +724,20 @@ private extension SquirrelPanel {
 
     // 重新计算分区高度并设置滚动条（与 draw 中保持一致）
     var preeditDocHeight: CGFloat = 0
+    
+    // ========== 🔍 调试信息：第二次预编辑范围检查 ==========
+    print("🔍 [SquirrelPanel.show] 第二次预编辑范围调试:")
+    print("   📝 view.preeditRange: \(view.preeditRange)")
+    print("   📏 preeditRange.length: \(view.preeditRange.length)")
+    
     if view.preeditRange.length > 0, let pr = view.convertPreedit(range: view.preeditRange) {
       preeditDocHeight = view.contentRectPreedit(range: pr).height
+      print("   ✅ 第二次计算成功，高度: \(preeditDocHeight)")
+    } else {
+      print("   ❌ 第二次计算失败或长度为0")
     }
+    print("   ----------------------------------------")
+    
     // 视觉上的额外上下边距（与 draw 中一致）
     let preeditPadding = (view.preeditRange.length > 0)
       ? (theme.edgeInset.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2)
@@ -634,19 +750,6 @@ private extension SquirrelPanel {
     // 候选区域置于下方，填充剩余空间
     view.candidateScrollView.frame.origin.y = contentView!.bounds.minY
     view.candidateScrollView.frame.size.height = max(0, contentView!.bounds.height - view.preeditScrollView.frame.height)
-
-  // 更新 layout：在更改 frame 后强制刷新文本布局，避免首项空白
-  view.preeditTextView.textLayoutManager?.ensureLayout(for: view.preeditTextView.textLayoutManager!.documentRange)
-  view.candidateTextView.textLayoutManager?.ensureLayout(for: view.candidateTextView.textLayoutManager!.documentRange)
-  view.preeditTextView.layoutSubtreeIfNeeded()
-  view.candidateTextView.layoutSubtreeIfNeeded()
-
-  // 布局并确保“文档开始”可见，随后触发一次重绘以同步高亮
-  view.preeditTextView.layoutSubtreeIfNeeded()
-  view.candidateTextView.layoutSubtreeIfNeeded()
-  view.preeditTextView.scrollRangeToVisible(NSRange(location: 0, length: 0))
-  view.candidateTextView.scrollRangeToVisible(NSRange(location: 0, length: 0))
-  view.needsDisplay = true
 
     // doc heights
     let candidateDocHeight: CGFloat = {

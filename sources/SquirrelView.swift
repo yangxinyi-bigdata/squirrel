@@ -4,6 +4,56 @@
 //
 //  Created by Leo Liu on 5/9/24.
 //
+// ========================================================================
+// 🎨 松鼠输入法视图渲染系统 - SquirrelView 核心模块
+// ========================================================================
+//
+// 📋 模块功能概述：
+// 这是松鼠输入法的"绘图引擎"，负责将文本数据转换为用户看到的精美界面。
+// 就像一个专业的画家，它拿着SquirrelTheme提供的"颜料"和SquirrelPanel传来的"草图"，
+// 在屏幕这张"画布"上绘制出最终的候选字窗口。
+//
+// 🏗️ 核心职责：
+// 1. 🖼️ 图形渲染：绘制窗口背景、边框、圆角、阴影等视觉效果
+// 2. 📝 文本渲染：处理富文本的显示，包括字体、颜色、对齐等
+// 3. 🎯 高亮效果：绘制候选字的选中高亮、悬停效果
+// 4. 📄 分页指示：绘制翻页按钮和页码信息
+// 5. 📐 几何计算：计算文本位置、窗口尺寸、点击区域
+// 6. 🔄 布局管理：处理垂直/水平布局的坐标转换
+// 7. 🖱️ 交互检测：将鼠标点击坐标转换为对应的候选字索引
+//
+// 🔄 主要工作流程：
+// 1. 接收SquirrelPanel传来的富文本和布局参数
+// 2. 使用SquirrelTheme提供的样式信息
+// 3. 计算各个元素的位置和大小
+// 4. 在drawRect中绘制所有视觉元素
+// 5. 响应点击事件，返回对应的候选字索引
+//
+// 🎯 关键特性：
+// - 支持垂直/水平两种文本布局
+// - 自定义文本换行控制（noBreak属性）
+// - 精确的文本几何计算
+// - 平滑的高亮动画效果
+// - 智能的分页按钮布局
+// - 独立的预编辑和候选区域滚动
+//
+// 📐 几何系统：
+// - contentRect: 计算文本内容的边界框
+// - click: 将屏幕坐标转换为文本索引
+// - drawRect: 在指定区域绘制界面
+//
+// 🎨 渲染层次（从底到顶）：
+// 1. 窗口形状和背景色
+// 2. 边框和阴影
+// 3. 文本内容
+// 4. 高亮背景
+// 5. 分页按钮
+//
+// 🎯 在输入法架构中的位置：
+// SquirrelPanel → SquirrelView ← SquirrelTheme
+// (界面协调)     (图形渲染)   (样式提供)
+//
+// ========================================================================
 
 // 导入 AppKit，这是 macOS 应用界面开发的核心库
 // 就像导入一个绘画工具箱，里面有各种绘制界面的工具
@@ -14,16 +64,27 @@ import AppKit
 private class SquirrelLayoutDelegate: NSObject, NSTextLayoutManagerDelegate {
   // 这个函数决定是否应该在某个位置换行
   // 就像决定一行文字写满了是否要另起一行
+  // 
+  // 参数说明：
+  // - textLayoutManager: 文本布局管理器，负责管理整个文本的布局和排版
+  // - location: 当前考虑换行的文本位置，这是一个抽象的文本位置对象
+  // - hyphenating: 是否允许连字符换行（如英文单词中间加横线换行），在中文输入法中通常为false
+  // 
+  // 返回值：
+  // - true: 允许在此位置换行，文本会在这里折断到下一行
+  // - false: 禁止在此位置换行，强制保持文本在同一行
   func textLayoutManager(_ textLayoutManager: NSTextLayoutManager, shouldBreakLineBefore location: any NSTextLocation, hyphenating: Bool) -> Bool {
     // 计算当前位置在文本中的索引
+    // 将抽象的文本位置(NSTextLocation)转换为具体的数字索引(Int)
     let index = textLayoutManager.offset(from: textLayoutManager.documentRange.location, to: location)
     
     // 检查当前位置的文本是否有 "noBreak" 属性（不换行属性）
+    // 这是一个自定义属性，用来标记某些文本区域不允许换行（比如短的候选词）
     if let attributes = textLayoutManager.textContainer?.textView?.textContentStorage?.attributedString?.attributes(at: index, effectiveRange: nil),
        let noBreak = attributes[.noBreak] as? Bool, noBreak {
       return false  // 如果设置了不换行，就返回 false（不要换行）
     }
-    return true  // 否则允许换行
+    return true  // 否则允许换行（默认行为）
   }
 }
 
@@ -80,58 +141,130 @@ final class SquirrelView: NSView {
     textLayoutManager.textContainer!         // 文本容器
   }
 
-  // 初始化函数，创建一个新的鼠须管视图
+  // 初始化函数：创建一个新的鼠须管输入法候选窗口视图
+  // 参数 frameRect（框架矩形）：指定视图的初始位置和尺寸
   override init(frame frameRect: NSRect) {
-    squirrelLayoutDelegate = SquirrelLayoutDelegate()  // 创建布局代理
-    preeditTextView = NSTextView(frame: frameRect)
-    preeditScrollView = NSScrollView(frame: frameRect)
-    candidateTextView = NSTextView(frame: frameRect)
-    candidateScrollView = NSScrollView(frame: frameRect)
     
-    // 配置文本视图的属性
+    // ========== 第一步：创建核心组件 ==========
+    squirrelLayoutDelegate = SquirrelLayoutDelegate()  // 创建布局代理：负责处理文本布局和排版逻辑
+    
+    // 创建预编辑文本视图（拼音输入区域）
+    preeditTextView = NSTextView(frame: frameRect)     // 显示用户正在输入的拼音
+    preeditScrollView = NSScrollView(frame: frameRect) // 预编辑文本的滚动容器
+    
+    // 创建候选词文本视图（候选词列表区域）
+    candidateTextView = NSTextView(frame: frameRect)     // 显示候选词列表
+    candidateScrollView = NSScrollView(frame: frameRect) // 候选词的滚动容器
+    
+    // ========== 第二步：统一配置文本视图的基础属性 ==========
     for tv in [preeditTextView, candidateTextView] {
+      // drawsBackground（绘制背景）= false：不绘制默认的白色背景，保持透明
       tv.drawsBackground = false
+      
+      // isEditable（可编辑性）= false：禁止用户直接编辑文本内容
       tv.isEditable = false
+      
+      // isSelectable（可选择性）= false：禁止用户选择文本
       tv.isSelectable = false
+      
+      // textLayoutManager.delegate（文本布局管理器代理）：设置自定义布局代理
       tv.textLayoutManager?.delegate = squirrelLayoutDelegate
     }
     
-    super.init(frame: frameRect)                       // 调用父类初始化
+    // ========== 第三步：调用父类初始化 ==========
+    super.init(frame: frameRect)  // 初始化 NSView 的基础功能
     
-    // 进一步配置
-  candidateTextView.textContainer?.lineFragmentPadding = 0
-  preeditTextView.textContainer?.lineFragmentPadding = 0
-    self.wantsLayer = true                             // 启用图层支持
-    self.layer?.masksToBounds = true                   // 图层内容不超出边界
-  self.autoresizingMask = [.width, .height]
+    // ========== 第四步：配置文本容器的细节 ==========
+    // lineFragmentPadding（行片段内边距）= 0：移除文本左右两侧的默认边距
+    candidateTextView.textContainer?.lineFragmentPadding = 0
+    preeditTextView.textContainer?.lineFragmentPadding = 0
+    
+    // ========== 第五步：配置视图层级属性 ==========
+    // wantsLayer（需要图层）= true：启用 Core Animation 图层支持，提升渲染性能
+    self.wantsLayer = true
+    
+    // masksToBounds（遮罩边界）= true：确保子视图内容不会超出父视图边界显示
+    self.layer?.masksToBounds = true
+    
+    // autoresizingMask（自动调整尺寸掩码）：当父视图尺寸改变时，自动调整宽度和高度
+    self.autoresizingMask = [.width, .height]
 
-    // 配置两个滚动容器与文本视图关系
+    // ========== 第六步：统一配置滚动视图的属性 ==========
     for sv in [preeditScrollView, candidateScrollView] {
+      // drawsBackground（绘制背景）= false：滚动视图不绘制背景，保持透明
       sv.drawsBackground = false
+      
+      // hasVerticalScroller（有垂直滚动条）= true：当内容超出高度时显示垂直滚动条
       sv.hasVerticalScroller = true
+      
+      // hasHorizontalScroller（有水平滚动条）= false：不显示水平滚动条
       sv.hasHorizontalScroller = false
+      
+      // scrollerStyle（滚动条样式）= .overlay：使用覆盖式滚动条（半透明，不占用空间）
       sv.scrollerStyle = .overlay
+      
+      // borderType（边框类型）= .noBorder：不显示边框
       sv.borderType = .noBorder
+      
+      // autohidesScrollers（自动隐藏滚动条）= true：不滚动时自动隐藏滚动条
       sv.autohidesScrollers = true
+      
+      // usesPredominantAxisScrolling（使用主轴滚动）= true：优化滚动体验，主要沿一个方向滚动
       sv.usesPredominantAxisScrolling = true
     }
-    preeditScrollView.documentView = preeditTextView
-    candidateScrollView.documentView = candidateTextView
+    
+    // ========== 第七步：建立滚动视图与文本视图的关联关系 ==========
+    // documentView（文档视图）：设置滚动视图要显示和滚动的内容视图
+    preeditScrollView.documentView = preeditTextView       // 预编辑滚动视图显示预编辑文本
+    candidateScrollView.documentView = candidateTextView   // 候选词滚动视图显示候选词文本
 
-  // 监听滚动，滚动时重绘以同步高亮背景与内容位置
-  preeditScrollView.contentView.postsBoundsChangedNotifications = true
-  candidateScrollView.contentView.postsBoundsChangedNotifications = true
-  NotificationCenter.default.addObserver(self, selector: #selector(handleClipViewBoundsChanged(_:)), name: NSView.boundsDidChangeNotification, object: preeditScrollView.contentView)
-  NotificationCenter.default.addObserver(self, selector: #selector(handleClipViewBoundsChanged(_:)), name: NSView.boundsDidChangeNotification, object: candidateScrollView.contentView)
+    // ========== 第八步：设置滚动事件监听 ==========
+    // 目的：当用户滚动时，及时重绘视图以保持高亮背景与文本内容的位置同步
+    
+    // postsBoundsChangedNotifications（发送边界改变通知）= true：当滚动位置改变时发送通知
+    preeditScrollView.contentView.postsBoundsChangedNotifications = true
+    candidateScrollView.contentView.postsBoundsChangedNotifications = true
+    
+    // 添加通知观察者：监听滚动视图的边界改变事件
+    // selector（选择器）：指定处理通知的方法
+    // name（通知名称）：NSView.boundsDidChangeNotification 表示视图边界已改变
+    // object（对象）：指定监听哪个视图的通知
+    NotificationCenter.default.addObserver(
+      self,  // 观察者：当前视图对象
+      selector: #selector(handleClipViewBoundsChanged(_:)),  // 处理方法：边界改变时调用
+      name: NSView.boundsDidChangeNotification,  // 通知类型：边界改变通知
+      object: preeditScrollView.contentView      // 监听对象：预编辑滚动视图的内容视图
+    )
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(handleClipViewBoundsChanged(_:)),
+      name: NSView.boundsDidChangeNotification,
+      object: candidateScrollView.contentView    // 监听对象：候选词滚动视图的内容视图
+    )
 
-    // 让文本在垂直方向可扩展，由滚动容器裁切
+    // ========== 第九步：配置文本视图的尺寸调整行为 ==========
+    // 目的：让文本在垂直方向可以无限扩展，超出部分由滚动容器进行裁切和滚动
     for tv in [preeditTextView, candidateTextView] {
+      // isVerticallyResizable（垂直可调整尺寸）= true：允许文本视图垂直方向自动调整高度
       tv.isVerticallyResizable = true
+      
+      // isHorizontallyResizable（水平可调整尺寸）= false：禁止水平方向调整，固定宽度
       tv.isHorizontallyResizable = false
+      
+      // 配置文本容器的跟踪和尺寸属性
       if let container = tv.textContainer {
+        // widthTracksTextView（宽度跟踪文本视图）= true：容器宽度跟随文本视图宽度变化
         container.widthTracksTextView = true
+        
+        // heightTracksTextView（高度跟踪文本视图）= false：容器高度不跟随文本视图，允许无限扩展
         container.heightTracksTextView = false
-        container.containerSize = NSSize(width: frameRect.width, height: CGFloat.greatestFiniteMagnitude)
+        
+        // containerSize（容器尺寸）：设置文本容器的尺寸
+        // 宽度使用传入的框架宽度，高度设为最大值以允许无限垂直扩展
+        container.containerSize = NSSize(
+          width: frameRect.width,                    // 宽度：使用父视图的宽度
+          height: CGFloat.greatestFiniteMagnitude    // 高度：设为最大可能值，实现无限扩展
+        )
       }
     }
 
@@ -164,93 +297,254 @@ final class SquirrelView: NSView {
     NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
   }
 
-  // 当前滚动偏移（文档坐标 -> 可见坐标）
+  // ========== 滚动偏移量相关属性 ==========
+  // 用于获取当前滚动视图的滚动位置，将文档坐标转换为可见区域坐标
+  
+  // scrollOffset（滚动偏移量）：通用的滚动偏移量获取属性
+  // 为了保持向后兼容性，默认返回候选词区域的滚动偏移量
+  // NSPoint：表示二维点坐标，包含 x（水平位移）和 y（垂直位移）
   var scrollOffset: NSPoint { // 兼容旧逻辑，等同候选区
     return candidateScrollView.contentView.bounds.origin
   }
+  
+  // candidateScrollOffset（候选词滚动偏移量）：获取候选词列表的当前滚动位置
+  // 
+  // 【关键概念解析：bounds.origin】
+  // bounds：表示视图内容区域的边界矩形，包含 origin（原点）和 size（尺寸）
+  // origin：矩形的"原点"，即左上角的坐标位置
+  // 
+  // 在滚动视图中，origin 的含义：
+  // - origin.x：水平滚动偏移量（向右滚动时增加，向左滚动时减少）
+  // - origin.y：垂直滚动偏移量（向下滚动时增加，向上滚动时减少）
+  // 
+  // 具体例子：
+  // - 未滚动时：origin = (0, 0) - 显示文档的最开始部分
+  // - 向下滚动100像素后：origin = (0, 100) - 文档向上移动了100像素
+  // - 向右滚动50像素后：origin = (50, 100) - 文档向左移动了50像素
+  // 
+  // 可以这样理解：origin 表示"可见窗口"在整个文档中的位置
+  // 就像透过一个固定大小的窗户看一张大报纸，origin 告诉我们窗户当前对准报纸的哪个位置
   var candidateScrollOffset: NSPoint { candidateScrollView.contentView.bounds.origin }
+  
+  // preeditScrollOffset（预编辑滚动偏移量）：获取预编辑区域（拼音输入区）的当前滚动位置
   var preeditScrollOffset: NSPoint { preeditScrollView.contentView.bounds.origin }
+  
+  // preeditFrameOriginY（预编辑框架原点Y坐标）：获取预编辑滚动视图在父视图中的垂直位置
+  // frame.origin.y：视图在父视图坐标系中的Y坐标（从父视图顶部开始计算）
   private var preeditFrameOriginY: CGFloat { preeditScrollView.frame.origin.y }
+  
+  // candidateFrameOriginY（候选词框架原点Y坐标）：获取候选词滚动视图在父视图中的垂直位置
   private var candidateFrameOriginY: CGFloat { candidateScrollView.frame.origin.y }
 
-  // 将 NSRange 转换为 NSTextRange 的工具函数
-  // NSRange 是旧式的范围表示，NSTextRange 是新式的范围表示
+  // ========== 文本范围转换工具函数 ==========
+  // 在 macOS 文本系统中，有两种表示文本范围的方式：
+  // 1. NSRange：传统方式，使用整数位置和长度（location + length）
+  // 2. NSTextRange：现代方式，使用抽象位置对象，更灵活和准确
+  
+  // convert（转换函数）：将候选词区域的 NSRange 转换为 NSTextRange
+  // 参数 range（范围）：要转换的文本范围，包含位置(location)和长度(length)
+  // 返回值：转换后的 NSTextRange 对象，如果转换失败则返回 nil
   func convert(range: NSRange) -> NSTextRange? {
+    // guard 语句：安全检查，如果条件不满足则提前返回
+    // NSRange.empty：表示空范围（位置0，长度0），对于空范围无需转换
     guard range != .empty else { return nil }  // 如果是空范围，返回 nil
     
-    // 计算起始位置
-    guard let startLocation = candidateTextView.textLayoutManager?.location(candidateTextView.textLayoutManager!.documentRange.location, offsetBy: range.location) else { return nil }
-    // 计算结束位置
-    guard let endLocation = candidateTextView.textLayoutManager?.location(startLocation, offsetBy: range.length) else { return nil }
-    // 创建并返回文本范围
+    // ========== 第一步：计算起始位置 ==========
+    // textLayoutManager（文本布局管理器）：负责管理文本的布局和位置计算
+    // documentRange.location：文档的起始位置（通常是文档开头）
+    // offsetBy：从指定位置偏移指定的字符数量
+    // range.location：NSRange 中的起始位置（从0开始计数）
+    guard let startLocation = candidateTextView.textLayoutManager?.location(
+      candidateTextView.textLayoutManager!.documentRange.location,  // 从文档开头开始
+      offsetBy: range.location  // 偏移到 NSRange 指定的起始位置
+    ) else { return nil }  // 如果无法计算起始位置，返回 nil
+    
+    // ========== 第二步：计算结束位置 ==========
+    // 从起始位置再偏移 range.length 个字符，得到结束位置
+    // range.length：NSRange 中的长度（要选择的字符数量）
+    guard let endLocation = candidateTextView.textLayoutManager?.location(
+      startLocation,          // 从刚才计算的起始位置开始
+      offsetBy: range.length  // 偏移指定的长度
+    ) else { return nil }  // 如果无法计算结束位置，返回 nil
+    
+    // ========== 第三步：创建并返回文本范围 ==========
+    // NSTextRange：使用起始位置和结束位置创建新式文本范围对象
+    // location：范围的起始位置，end：范围的结束位置
     return NSTextRange(location: startLocation, end: endLocation)
   }
 
-  // 新增：专用于预编辑区的转换
+  // convertPreedit（预编辑转换函数）：专门用于预编辑区域的 NSRange 到 NSTextRange 转换
+  // 功能与 convert 函数相同，但操作的是预编辑文本视图而不是候选词文本视图
+  // 参数 range（范围）：预编辑区域中要转换的文本范围
+  // 返回值：转换后的 NSTextRange 对象，用于预编辑区域的文本操作
   func convertPreedit(range: NSRange) -> NSTextRange? {
+    // 安全检查：如果是空范围，无需转换
     guard range != .empty else { return nil }
-    guard let startLocation = preeditTextView.textLayoutManager?.location(preeditTextView.textLayoutManager!.documentRange.location, offsetBy: range.location) else { return nil }
-    guard let endLocation = preeditTextView.textLayoutManager?.location(startLocation, offsetBy: range.length) else { return nil }
+    
+    // 计算预编辑区域的起始位置
+    // 使用 preeditTextView 的文本布局管理器进行位置计算
+    guard let startLocation = preeditTextView.textLayoutManager?.location(
+      preeditTextView.textLayoutManager!.documentRange.location,  // 预编辑文档的起始位置
+      offsetBy: range.location  // 偏移到指定起始位置
+    ) else { return nil }
+    
+    // 计算预编辑区域的结束位置
+    guard let endLocation = preeditTextView.textLayoutManager?.location(
+      startLocation,          // 从起始位置开始
+      offsetBy: range.length  // 偏移指定长度
+    ) else { return nil }
+    
+    // 创建并返回预编辑区域的文本范围
     return NSTextRange(location: startLocation, end: endLocation)
   }
 
-  // 获取包含整个内容的矩形区域，计算成本较高
-  // 这个函数就像测量一张纸上所有文字占用的总面积
+  // ========== 内容区域计算相关函数 ==========
+  // 这些函数用于计算文本内容在屏幕上占用的矩形区域，是布局和渲染的基础
+  
+  // contentRect（内容矩形）：获取包含所有文本内容的矩形区域
+  // 注意：这是一个计算成本较高的操作，类似于测量一张纸上所有文字占用的总面积
+  // NSRect：表示矩形区域，包含位置(origin)和尺寸(size)
   var contentRect: NSRect {
+    // 初始化为零矩形（位置0,0，尺寸0x0）
     var rect: NSRect = .zero
+    
+    // ========== 处理候选词文本区域 ==========
+    // textLayoutManager（文本布局管理器）：负责文本的布局计算和渲染
     if let tlm = candidateTextView.textLayoutManager {
+      // documentRange：整个文档的文本范围（从开头到结尾）
       let r = contentRect(range: tlm.documentRange)
-      if r.width.isFinite && r.height.isFinite { rect = rect.union(r) }
+      
+      // 安全检查：确保计算出的矩形尺寸是有限的数值
+      // isFinite：检查浮点数是否为有限值（不是无穷大或NaN）
+      if r.width.isFinite && r.height.isFinite { 
+        // union（联合）：将两个矩形合并成一个包含两者的最小矩形
+        rect = rect.union(r) 
+      }
     }
+    
+    // ========== 处理预编辑文本区域 ==========
     if let tlm = preeditTextView.textLayoutManager {
+      // 使用专门的预编辑内容矩形计算函数
       let r = contentRectPreedit(range: tlm.documentRange)
-      if r.width.isFinite && r.height.isFinite { rect = rect.union(r) }
+      
+      // 同样进行安全检查和矩形合并
+      if r.width.isFinite && r.height.isFinite { 
+        rect = rect.union(r) 
+      }
     }
+    
+    // 返回包含所有文本内容的最终矩形
     return rect
   }
-  // 获取包含指定文本范围的矩形，计算成本较高
-  // 这个函数会先转换为字形范围，然后计算矩形边界
+  
+  // contentRect（指定范围内容矩形）：计算指定文本范围在屏幕上占用的矩形区域
+  // 这个函数会遍历文本段，计算每个段的位置，然后找出包含所有段的边界矩形
+  // 参数 range（范围）：要计算矩形的文本范围（NSTextRange 对象）
+  // 返回值：包含指定文本范围的矩形区域
   func contentRect(range: NSTextRange) -> NSRect {
-    // 初始化边界值
-    // swiftlint:disable:next identifier_name
-    var x0 = CGFloat.infinity, x1 = -CGFloat.infinity, y0 = CGFloat.infinity, y1 = -CGFloat.infinity
+    // ========== 初始化边界值 ==========
+    // 使用极值初始化，这样第一次比较时会被实际值替换
+    // swiftlint:disable:next identifier_name  // 禁用变量命名检查（x0, y0 等简短名称是合理的）
+    var x0 = CGFloat.infinity,      // 左边界：初始为正无穷，找最小值
+        x1 = -CGFloat.infinity,     // 右边界：初始为负无穷，找最大值
+        y0 = CGFloat.infinity,      // 上边界：初始为正无穷，找最小值
+        y1 = -CGFloat.infinity      // 下边界：初始为负无穷，找最大值
     
-    // 枚举文本段，计算每个段的矩形
-    candidateTextView.textLayoutManager?.enumerateTextSegments(in: range, type: .standard, options: .rangeNotRequired) { _, rect, _, _ in
-      var rect = rect
-      rect.origin.x -= candidateScrollOffset.x
-      rect.origin.y -= candidateScrollOffset.y
+    // ========== 枚举文本段并计算边界 ==========
+    // enumerateTextSegments（枚举文本段）：遍历指定范围内的所有文本段
+    // type: .standard：使用标准文本段类型
+    // options: .rangeNotRequired：不需要精确的范围信息，提高性能
+    candidateTextView.textLayoutManager?.enumerateTextSegments(
+      in: range,                    // 要枚举的文本范围
+      type: .standard,              // 文本段类型：标准段落
+      options: .rangeNotRequired    // 枚举选项：不需要精确范围信息
+    ) { _, rect, _, _ in
+      // 闭包参数说明：
+      // 第1个参数：文本段范围（我们不使用，所以用 _ 忽略）
+      // 第2个参数 rect：文本段的矩形区域
+      // 第3、4个参数：基线和其他信息（我们不使用）
+      
+      // ========== 坐标转换：从文档坐标转换为视图坐标 ==========
+      var rect = rect  // 创建可变副本
+      
+      // 减去滚动偏移量，将文档坐标转换为可见区域坐标
+      // candidateScrollOffset：当前候选词区域的滚动位置
+      rect.origin.x -= candidateScrollOffset.x  // 调整水平位置
+      rect.origin.y -= candidateScrollOffset.y  // 调整垂直位置
+      
+      // 加上候选词框架的垂直偏移，转换为整个视图的坐标系
+      // candidateFrameOriginY：候选词滚动视图在父视图中的Y坐标
       rect.origin.y += candidateFrameOriginY
-      x0 = min(rect.minX, x0)  // 更新边界
-      x1 = max(rect.maxX, x1)
-      y0 = min(rect.minY, y0)
-      y1 = max(rect.maxY, y1)
-      return true  // 继续枚举
+      
+      // ========== 更新边界值 ==========
+      // 通过比较每个文本段的边界，找出包含所有段的最小矩形
+      x0 = min(rect.minX, x0)  // 更新左边界（最小X坐标）
+      x1 = max(rect.maxX, x1)  // 更新右边界（最大X坐标）
+      y0 = min(rect.minY, y0)  // 更新上边界（最小Y坐标）
+      y1 = max(rect.maxY, y1)  // 更新下边界（最大Y坐标）
+      
+      return true  // 返回 true 表示继续枚举下一个文本段
     }
-    return NSRect(x: x0, y: y0, width: x1-x0, height: y1-y0)  // 返回包含范围的矩形
+    
+    // ========== 构造并返回最终矩形 ==========
+    // 使用计算出的边界值创建包含所有文本段的矩形
+    return NSRect(
+      x: x0,              // 左上角X坐标
+      y: y0,              // 左上角Y坐标  
+      width: x1 - x0,     // 宽度（右边界 - 左边界）
+      height: y1 - y0     // 高度（下边界 - 上边界）
+    )
   }
 
-  // 新增：预编辑区域的 contentRect
+  // contentRectPreedit（预编辑内容矩形）：专门用于计算预编辑区域的内容矩形
+  // 功能与 contentRect 函数相同，但操作的是预编辑文本视图
+  // 参数 range（范围）：预编辑区域中要计算矩形的文本范围
+  // 返回值：包含预编辑文本范围的矩形区域
   func contentRectPreedit(range: NSTextRange) -> NSRect {
+    // 使用相同的边界值初始化策略
     var x0 = CGFloat.infinity, x1 = -CGFloat.infinity, y0 = CGFloat.infinity, y1 = -CGFloat.infinity
-    preeditTextView.textLayoutManager?.enumerateTextSegments(in: range, type: .standard, options: .rangeNotRequired) { _, rect, _, _ in
-      var rect = rect
-      rect.origin.x -= preeditScrollOffset.x
-      rect.origin.y -= preeditScrollOffset.y
-      rect.origin.y += preeditFrameOriginY
+    
+    // 枚举预编辑文本视图中的文本段
+    preeditTextView.textLayoutManager?.enumerateTextSegments(
+      in: range, 
+      type: .standard, 
+      options: .rangeNotRequired
+    ) { _, rect, _, _ in
+      var rect = rect  // 创建可变副本进行坐标转换
+      
+      // 进行预编辑区域特有的坐标转换
+      rect.origin.x -= preeditScrollOffset.x    // 减去预编辑区域的水平滚动偏移
+      rect.origin.y -= preeditScrollOffset.y    // 减去预编辑区域的垂直滚动偏移
+      rect.origin.y += preeditFrameOriginY      // 加上预编辑框架的垂直偏移
+      
+      // 更新边界值
       x0 = min(rect.minX, x0)
       x1 = max(rect.maxX, x1)
       y0 = min(rect.minY, y0)
       y1 = max(rect.maxY, y1)
-      return true
+      
+      return true  // 继续枚举
     }
+    
+    // 构造并返回预编辑区域的内容矩形
     return NSRect(x: x0, y: y0, width: x1-x0, height: y1-y0)
   }
 
-  // 触发视图重绘的函数，会调用 drawRect 方法
-  // 这个函数更新视图的显示状态，就像给画家提供新的绘画信息
+  // ========== 视图重绘控制函数 ==========
+  // 这个函数用于触发视图的重新绘制，当文本内容或布局发生变化时调用
   // swiftlint:disable:next function_parameter_count
   func drawView(candidateRanges: [NSRange], hilightedIndex: Int, preeditRange: NSRange, highlightedPreeditRange: NSRange, canPageUp: Bool, canPageDown: Bool) {
+    // ========== 🔍 调试日志：drawView 参数接收 ==========
+    print("🎨 [SquirrelView.drawView] 接收绘制参数:")
+    print("   📋 候选字数量: \(candidateRanges.count)")
+    print("   🎯 高亮索引: \(hilightedIndex)")
+    print("   📄 预编辑范围: \(preeditRange)")
+    for (i, range) in candidateRanges.enumerated() {
+      let isHighlighted = (i == hilightedIndex)
+      print("   📝 候选字[\(i)]: \(range) \(isHighlighted ? "🔵 [高亮]" : "")")
+    }
+    print("   ----------------------------------------")
+    
     // 保存新的状态信息
     self.candidateRanges = candidateRanges              // 候选字范围列表
     self.hilightedIndex = hilightedIndex                // 高亮的候选字索引
@@ -265,6 +559,12 @@ final class SquirrelView: NSView {
   // 这是整个视图的绘制核心，就像画家在画布上作画
   // swiftlint:disable:next cyclomatic_complexity
   override func draw(_ dirtyRect: NSRect) {
+    // ========== 🔍 调试日志：draw 函数开始 ==========
+    print("🖼️ [SquirrelView.draw] 开始实际绘制:")
+    print("   🎯 当前高亮索引: \(hilightedIndex)")
+    print("   📋 候选字数量: \(candidateRanges.count)")
+    print("   📏 绘制区域: \(dirtyRect)")
+    
     // 声明各种路径变量，用于绘制不同的形状
     var backgroundPath: CGPath?              // 背景路径
     var preeditPath: CGPath?                 // 预编辑文本背景路径
@@ -273,16 +573,26 @@ final class SquirrelView: NSView {
     var highlightedPreeditPath: CGMutablePath?  // 高亮预编辑文本路径
     let theme = currentTheme                 // 获取当前主题
 
+    // 🔍 调试：检查翻页按钮相关设置
+    print("🔍 [SquirrelView.draw] 翻页设置调试:")
+    print("   📊 showPaging: \(theme.showPaging)")
+    print("   📏 pagingOffset: \(theme.pagingOffset)")
+    print("   📦 原始 dirtyRect: \(dirtyRect)")
+
     // 计算包含区域，为翻页按钮留出空间
     var containingRect = dirtyRect
     containingRect.size.width -= theme.pagingOffset
     let backgroundRect = containingRect
+    
+    print("   📦 调整后 containingRect: \(containingRect)")
+    print("   📦 backgroundRect: \(backgroundRect)")
+    print("   ----------------------------------------")
 
     // 绘制预编辑文本矩形区域
     var preeditRect = NSRect.zero
-  if preeditRange.length > 0, let preeditTextRange = convertPreedit(range: preeditRange) {
+    if preeditRange.length > 0, let preeditTextRange = convertPreedit(range: preeditRange) {
       // 计算预编辑文本的显示区域
-  preeditRect = contentRectPreedit(range: preeditTextRange)
+      preeditRect = contentRectPreedit(range: preeditTextRange)
       preeditRect.size.width = backgroundRect.size.width  // 宽度占满背景区域
       // 调整高度，包含边距和行间距
       preeditRect.size.height += theme.edgeInset.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2
@@ -305,18 +615,47 @@ final class SquirrelView: NSView {
 
     containingRect = carveInset(rect: containingRect)  // 雕刻内边距
     
+    // ========== 🔍 调试日志：候选字绘制循环开始 ==========
+    print("🎨 [SquirrelView.draw] 开始绘制候选字:")
+    print("   📊 包含矩形: \(containingRect)")
+    print("   🎯 当前高亮索引: \(hilightedIndex)")
+    
     // 绘制候选字矩形区域
     for i in 0..<candidateRanges.count {
       let candidate = candidateRanges[i]  // 获取当前候选字的范围
+      let isHighlighted = (i == hilightedIndex)
+      
+      // ========== 🔍 调试日志：每个候选字的处理 ==========
+      print("   📝 处理候选字[\(i)]:")
+      print("      📍 范围: \(candidate)")
+      print("      🎯 是否高亮: \(isHighlighted)")
+      print("      📏 范围长度: \(candidate.length)")
       
       if i == hilightedIndex {
         // 绘制高亮（选中）的候选字背景
+        print("      🔵 [高亮路径] 开始绘制高亮背景...")
+        print("      🎨 高亮背景颜色: \(theme.highlightedBackColor?.description ?? "nil")")
+        
         if candidate.length > 0 && theme.highlightedBackColor != nil {
+          print("      ✅ [高亮路径] 条件满足，调用 drawPathCandidate...")
           highlightedPath = drawPathCandidate(highlightedRange: candidate, backgroundRect: backgroundRect, preeditRect: preeditRect, containingRect: containingRect, extraExpansion: 0)?.mutableCopy()
+          if highlightedPath != nil {
+            print("      ✅ [高亮路径] 成功创建高亮路径")
+          } else {
+            print("      ❌ [高亮路径] 创建高亮路径失败")
+          }
+        } else {
+          print("      ❌ [高亮路径] 条件不满足:")
+          print("         - 范围长度 > 0: \(candidate.length > 0)")
+          print("         - 高亮颜色不为nil: \(theme.highlightedBackColor != nil)")
         }
       } else {
         // 绘制其他候选字的背景
+        print("      ⚪ [普通路径] 开始绘制普通背景...")
+        print("      🎨 普通背景颜色: \(theme.candidateBackColor?.description ?? "nil")")
+        
         if candidate.length > 0 && theme.candidateBackColor != nil {
+          print("      ✅ [普通路径] 条件满足，调用 drawPathCandidate...")
           let candidatePath = drawPathCandidate(highlightedRange: candidate, backgroundRect: backgroundRect, preeditRect: preeditRect,
                                        containingRect: containingRect, extraExpansion: theme.surroundingExtraExpansion)
           // 如果候选字路径容器不存在，创建一个
@@ -326,39 +665,151 @@ final class SquirrelView: NSView {
           // 将候选字路径添加到容器中
           if let candidatePath = candidatePath {
             candidatePaths?.addPath(candidatePath)
+            print("      ✅ [普通路径] 成功添加普通候选字路径")
+          } else {
+            print("      ❌ [普通路径] 创建普通候选字路径失败")
           }
+        } else {
+          print("      ❌ [普通路径] 条件不满足:")
+          print("         - 范围长度 > 0: \(candidate.length > 0)")
+          print("         - 普通背景颜色不为nil: \(theme.candidateBackColor != nil)")
         }
       }
+      print("   ----------------------------------------")
     }
+    
+    // ========== 🔍 调试日志：候选字绘制循环结束 ==========
+    print("🎨 [SquirrelView.draw] 候选字绘制循环结束")
+    print("   🔵 高亮路径是否创建: \(highlightedPath != nil)")
+    print("   ⚪ 普通路径是否创建: \(candidatePaths != nil)")
+    print("   ----------------------------------------")
 
-    // Draw highlighted part of preedit text
-  if (highlightedPreeditRange.length > 0) && (theme.highlightedPreeditColor != nil), let highlightedPreeditTextRange = convertPreedit(range: highlightedPreeditRange) {
-      var innerBox = preeditRect
+    // ========== 绘制预编辑文本的高亮部分 ==========
+    // 这个代码块负责为用户正在输入的拼音文本绘制高亮背景
+    // 高亮效果类似于文本编辑器中选中文本时的背景色
+    
+    // ========== 第一步：条件检查 ==========
+    // 只有满足以下所有条件时才进行高亮绘制：
+    // 1. highlightedPreeditRange.length > 0：有需要高亮的文本范围
+    // 2. theme.highlightedPreeditColor != nil：主题中定义了高亮颜色
+    // 3. convertPreedit 转换成功：能够将范围转换为文本布局系统可用的格式
+    if (highlightedPreeditRange.length > 0) && (theme.highlightedPreeditColor != nil), 
+       let highlightedPreeditTextRange = convertPreedit(range: highlightedPreeditRange) {
+      
+      // ========== 第二步：计算内部边界框（innerBox）==========
+      // innerBox（内边界框）：高亮背景实际绘制的区域，考虑了内边距
+      var innerBox = preeditRect  // 从预编辑矩形开始
+      
+      // 调整宽度：两边各减去边距和1像素的额外空间
+      // edgeInset.width（边缘内边距宽度）：主题定义的左右内边距
       innerBox.size.width -= (theme.edgeInset.width + 1) * 2
+      
+      // 调整水平位置：向右偏移边距和1像素
       innerBox.origin.x += theme.edgeInset.width + 1
+      
+      // 调整垂直位置：向下偏移边距和1像素
       innerBox.origin.y += theme.edgeInset.height + 1
+      
+      // ========== 第三步：根据是否有候选词调整高度 ==========
       if candidateRanges.count == 0 {
+        // 情况1：没有候选词时，上下都减去边距
+        // edgeInset.height（边缘内边距高度）：主题定义的上下内边距
         innerBox.size.height -= (theme.edgeInset.height + 1) * 2
       } else {
+        // 情况2：有候选词时，只减去上边距和一些额外的间距
+        // preeditLinespace（预编辑行间距）：预编辑文本的行间距
+        // hilitedCornerRadius（高亮圆角半径）：高亮背景的圆角大小
         innerBox.size.height -= theme.edgeInset.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2 + 2
       }
-      var outerBox = preeditRect
+      
+      // ========== 第四步：计算外部边界框（outerBox）==========
+      // outerBox（外边界框）：用于约束高亮形状的外部限制，考虑了圆角和边框
+      var outerBox = preeditRect  // 从预编辑矩形开始
+      
+      // 调整尺寸：减去圆角半径和边框线宽度的影响
+      // borderLineWidth（边框线宽度）：边框的粗细
+      // max(0, ...)：确保不会得到负值
       outerBox.size.height -= max(0, theme.hilitedCornerRadius + theme.borderLineWidth)
       outerBox.size.width -= max(0, theme.hilitedCornerRadius + theme.borderLineWidth)
+      
+      // 调整位置：向右下方偏移一半的圆角和边框尺寸，使边界框居中
       outerBox.origin.x += max(0, theme.hilitedCornerRadius + theme.borderLineWidth) / 2
       outerBox.origin.y += max(0, theme.hilitedCornerRadius + theme.borderLineWidth) / 2
 
-  let (leadingRect, bodyRect, trailingRect) = multilineRectsPreedit(forRange: highlightedPreeditTextRange, extraSurounding: 0, bounds: outerBox)
-      var (highlightedPoints, highlightedPoints2, rightCorners, rightCorners2) = linearMultilineFor(body: bodyRect, leading: leadingRect, trailing: trailingRect)
+      // ========== 第五步：计算多行文本的矩形分布 ==========
+      // multilineRectsPreedit（多行矩形预编辑）：将文本范围分解为多个矩形
+      // 返回三个矩形：开头矩形、主体矩形、结尾矩形
+      // forRange（文本范围）：要处理的高亮文本范围
+      // extraSurounding（额外环绕）：0表示不添加额外的环绕空间
+      // bounds（边界）：使用外边界框作为限制
+      let (leadingRect, bodyRect, trailingRect) = multilineRectsPreedit(
+        forRange: highlightedPreeditTextRange, 
+        extraSurounding: 0, 
+        bounds: outerBox
+      )
+      
+      // ========== 第六步：将矩形转换为线性点集合 ==========
+      // linearMultilineFor（线性多行处理）：将矩形转换为可以绘制平滑线条的点集合
+      // 返回两组点和两组角点（用于处理可能的多段高亮）
+      // highlightedPoints（高亮点集）：第一组高亮区域的顶点
+      // highlightedPoints2（第二组高亮点集）：第二组高亮区域的顶点（如果有的话）
+      // rightCorners（右角点）：需要特殊处理的右侧角点
+      var (highlightedPoints, highlightedPoints2, rightCorners, rightCorners2) = linearMultilineFor(
+        body: bodyRect, 
+        leading: leadingRect, 
+        trailing: trailingRect
+      )
 
+      // ========== 第七步：处理第一组高亮路径 ==========
+      // carveInset（雕刻内边距）：创建包含矩形，用于边界检查
       containingRect = carveInset(rect: preeditRect)
+      
+      // expand（扩展顶点）：将点集合在内外边界之间进行扩展，创建更好的视觉效果
+      // vertex（顶点）：要扩展的点集合
+      // innerBorder（内边界）：内部限制
+      // outerBorder（外边界）：外部限制
       highlightedPoints = expand(vertex: highlightedPoints, innerBorder: innerBox, outerBorder: outerBox)
-      rightCorners = removeCorner(highlightedPoints: highlightedPoints, rightCorners: rightCorners, containingRect: containingRect)
-      highlightedPreeditPath = drawSmoothLines(highlightedPoints, straightCorner: rightCorners, alpha: 0.3 * theme.hilitedCornerRadius, beta: 1.4 * theme.hilitedCornerRadius)?.mutableCopy()
+      
+      // removeCorner（移除角点）：移除不需要的角点，优化形状
+      rightCorners = removeCorner(
+        highlightedPoints: highlightedPoints, 
+        rightCorners: rightCorners, 
+        containingRect: containingRect
+      )
+      
+      // drawSmoothLines（绘制平滑线条）：创建平滑的高亮路径
+      // straightCorner（直角点）：需要保持直角的点
+      // alpha、beta：控制曲线平滑度的参数
+      // 0.3 * theme.hilitedCornerRadius：较小的平滑参数
+      // 1.4 * theme.hilitedCornerRadius：较大的平滑参数
+      // mutableCopy()：创建可修改的副本
+      highlightedPreeditPath = drawSmoothLines(
+        highlightedPoints, 
+        straightCorner: rightCorners, 
+        alpha: 0.3 * theme.hilitedCornerRadius, 
+        beta: 1.4 * theme.hilitedCornerRadius
+      )?.mutableCopy()
+      
+      // ========== 第八步：处理第二组高亮路径（如果存在）==========
+      // 当文本跨越多行或有多个分离的高亮区域时，可能存在第二组点
       if highlightedPoints2.count > 0 {
+        // 对第二组点执行相同的处理流程
         highlightedPoints2 = expand(vertex: highlightedPoints2, innerBorder: innerBox, outerBorder: outerBox)
-        rightCorners2 = removeCorner(highlightedPoints: highlightedPoints2, rightCorners: rightCorners2, containingRect: containingRect)
-        let highlightedPreeditPath2 = drawSmoothLines(highlightedPoints2, straightCorner: rightCorners2, alpha: 0.3 * theme.hilitedCornerRadius, beta: 1.4 * theme.hilitedCornerRadius)
+        rightCorners2 = removeCorner(
+          highlightedPoints: highlightedPoints2, 
+          rightCorners: rightCorners2, 
+          containingRect: containingRect
+        )
+        
+        // 为第二组点创建平滑路径
+        let highlightedPreeditPath2 = drawSmoothLines(
+          highlightedPoints2, 
+          straightCorner: rightCorners2, 
+          alpha: 0.3 * theme.hilitedCornerRadius, 
+          beta: 1.4 * theme.hilitedCornerRadius
+        )
+        
+        // 将第二条路径添加到主路径中，形成完整的高亮效果
         if let highlightedPreeditPath2 = highlightedPreeditPath2 {
           highlightedPreeditPath?.addPath(highlightedPreeditPath2)
         }
@@ -372,6 +823,13 @@ final class SquirrelView: NSView {
 
   // 清空现有的图层，重新开始绘制
   self.layer?.sublayers = nil
+    
+    // ========== 🔍 调试日志：最终图层处理 ==========
+    print("🖼️ [SquirrelView.draw] 开始最终图层处理:")
+    print("   🔵 高亮路径: \(highlightedPath != nil ? "存在" : "不存在")")
+    print("   ⚪ 普通路径: \(candidatePaths != nil ? "存在" : "不存在")")
+    print("   🎨 主题互斥模式: \(theme.mutualExclusive)")
+    
     // 创建主背景路径的副本，用于合并所有图形元素
     let backPath = backgroundPath?.mutableCopy()
     // 如果有输入预览区域，将其路径合并到主背景中
@@ -383,24 +841,35 @@ final class SquirrelView: NSView {
       // 将高亮路径合并到主背景
       if let path = highlightedPath {
         backPath?.addPath(path)
+        print("   ✅ 互斥模式：高亮路径已合并到主背景")
       }
       // 将候选字路径合并到主背景
       if let path = candidatePaths {
         backPath?.addPath(path)
+        print("   ✅ 互斥模式：候选字路径已合并到主背景")
       }
     }
+    
     // 创建主面板图层，设置背景色，就像给画布涂上底色
     let panelLayer = shapeFromPath(path: backPath)
     panelLayer.fillColor = theme.backgroundColor.cgColor
+    print("   🎨 主面板图层已创建，背景色: \(theme.backgroundColor)")
+    
     // 创建遮罩层，限制绘制范围在背景路径内，就像用模板控制绘画区域
     let panelLayerMask = shapeFromPath(path: backgroundPath)
     panelLayer.mask = panelLayerMask
+    
     // 将主图层添加到视图中
-  self.layer?.addSublayer(panelLayer)
+    self.layer?.addSublayer(panelLayer)
+    print("   ✅ 主面板图层已添加到视图")
 
+    // ========== 🔍 调试日志：开始颜色填充 ==========
+    print("🎨 [SquirrelView.draw] 开始颜色填充:")
+    
     // 开始填充各种颜色和效果
     // 绘制输入预览区域的背景色
     if let color = theme.preeditBackgroundColor, let path = preeditPath {
+      print("   📝 预编辑背景色: \(color)")
       let layer = shapeFromPath(path: path)  // 创建预览区图层
       layer.fillColor = color.cgColor  // 设置预览区背景色
       // 创建遮罩路径，控制绘制范围
@@ -430,16 +899,32 @@ final class SquirrelView: NSView {
     }
     // 绘制候选字的背景色（除了被选中的那个）
     if let color = theme.candidateBackColor, let path = candidatePaths {
+      print("   ⚪ 添加候选字背景色: \(color)")
       let layer = shapeFromPath(path: path)  // 创建候选字背景图层
       layer.fillColor = color.cgColor  // 设置候选字背景色
       panelLayer.addSublayer(layer)  // 添加到主图层
+      print("   ✅ 候选字背景图层已添加")
+    } else {
+      print("   ❌ 候选字背景未添加:")
+      print("      - 颜色: \(theme.candidateBackColor?.description ?? "nil")")
+      print("      - 路径: \(candidatePaths != nil ? "存在" : "不存在")")
     }
+    
+    // ========== 🔍 关键调试：被选中候选字的高亮背景 ==========
+    print("🔵 [关键] 处理高亮候选字背景:")
+    print("   🎨 高亮颜色: \(theme.highlightedBackColor?.description ?? "nil")")
+    print("   🛤️ 高亮路径: \(highlightedPath != nil ? "存在" : "不存在")")
+    
     // 绘制被选中候选字的高亮背景（最重要的视觉反馈）
     if let color = theme.highlightedBackColor, let path = highlightedPath {
+      print("   ✅ [关键] 条件满足，开始创建高亮图层...")
       let layer = shapeFromPath(path: path)  // 创建高亮图层
       layer.fillColor = color.cgColor  // 设置高亮背景色
+      print("   🎨 高亮图层已创建，颜色: \(color)")
+      
       // 如果设置了阴影效果，添加阴影让高亮更突出
       if theme.shadowSize > 0 {
+        print("   🌫️ 添加阴影效果，大小: \(theme.shadowSize)")
         let shadowLayer = CAShapeLayer()  // 创建阴影图层
         shadowLayer.shadowColor = NSColor.black.cgColor  // 阴影颜色为黑色
         // 设置阴影偏移量，垂直布局和水平布局方向不同
@@ -456,9 +941,28 @@ final class SquirrelView: NSView {
         layer.strokeColor = NSColor.black.withAlphaComponent(0.15).cgColor
         layer.lineWidth = 0.5
         layer.addSublayer(shadowLayer)  // 将阴影添加到高亮图层
+        print("   ✅ 阴影图层已添加")
+      } else {
+        print("   ⏭️ 跳过阴影：shadowSize = \(theme.shadowSize)")
       }
+      
       panelLayer.addSublayer(layer)  // 添加高亮图层到主图层
+      print("   ✅ [关键] 高亮图层已成功添加到主图层！")
+    } else {
+      print("   ❌ [关键] 高亮图层未添加:")
+      print("      - 高亮颜色: \(theme.highlightedBackColor?.description ?? "nil")")
+      print("      - 高亮路径: \(highlightedPath != nil ? "存在" : "不存在")")
     }
+    
+    // ========== 🔍 调试日志：绘制完成总结 ==========
+    print("🏁 [SquirrelView.draw] 绘制过程完成")
+    print("   📊 最终状态总结:")
+    print("   🔵 高亮索引: \(hilightedIndex)")
+    print("   🎨 高亮颜色设置: \(theme.highlightedBackColor?.description ?? "nil")")
+    print("   🛤️ 高亮路径创建: \(highlightedPath != nil ? "成功" : "失败")")
+    print("   🖼️ 图层数量: \(panelLayer.sublayers?.count ?? 0)")
+    print("   ========================================")
+    
     // 设置面板图层的位移偏移，用于翻页效果
     panelLayer.setAffineTransform(CGAffineTransform(translationX: theme.pagingOffset, y: 0))
     // 创建面板路径用于后续处理
