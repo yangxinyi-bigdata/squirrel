@@ -524,6 +524,10 @@ final class SquirrelPanel: NSPanel {
       view.candidateScrollView.contentView.scroll(to: candidateOffsetBefore)
       view.candidateScrollView.reflectScrolledClipView(view.candidateScrollView.contentView)
     }
+
+  // 键盘上下选择时，若高亮候选不在可见区域内，则自动滚动使其进入可见范围（优先贴到底部）。
+  // 该操作放在恢复偏移之后执行，以便覆盖仅高亮刷新时的偏移保留。
+  ensureHighlightedCandidateVisible()
   }
 
   // 更新状态消息的函数
@@ -566,6 +570,55 @@ final class SquirrelPanel: NSPanel {
 private extension SquirrelPanel {
   // 防止滚动导致的高亮刷新递归
   private static var isUpdatingFromScroll = false
+
+  // 将当前高亮候选滚动到可见区域（若在下方不可见则贴合到底部；若在上方不可见则贴合到顶部）
+  // 对于鼠标悬停导致的高亮，这里通常不会触发滚动，因为命中索引必然处于可见区域。
+  func ensureHighlightedCandidateVisible() {
+    // 无候选或索引越界不处理
+    guard !view.candidateRanges.isEmpty, index >= 0, index < view.candidateRanges.count else { return }
+    // 将 NSRange 转为 NSTextRange
+    guard let tr = view.convert(range: view.candidateRanges[index]) else { return }
+
+    // 计算该候选在文档坐标（candidateTextView 坐标系）中的边界框
+    var x0 = CGFloat.infinity, x1 = -CGFloat.infinity, y0 = CGFloat.infinity, y1 = -CGFloat.infinity
+    view.candidateTextView.textLayoutManager?.enumerateTextSegments(in: tr, type: .standard, options: [.rangeNotRequired]) { _, rect, _, _ in
+      x0 = min(x0, rect.minX); x1 = max(x1, rect.maxX)
+      y0 = min(y0, rect.minY); y1 = max(y1, rect.maxY)
+      return true
+    }
+    guard x0.isFinite, x1.isFinite, y0.isFinite, y1.isFinite else { return }
+
+    var docRect = NSRect(x: x0, y: y0, width: x1 - x0, height: y1 - y0)
+    // 扩展为与绘制一致的行高：+linespace，-半行距
+    let theme = view.currentTheme
+    docRect.size.height += theme.linespace
+    docRect.origin.y -= theme.linespace / 2
+
+    // 可见区域（同为文档坐标）
+    let clipView = view.candidateScrollView.contentView
+    let visible = clipView.documentVisibleRect
+
+    // 若已完全可见则不滚动
+    let epsilon: CGFloat = 0.5
+    if docRect.minY >= visible.minY - epsilon && docRect.maxY <= visible.maxY + epsilon { return }
+
+    // 目标 origin.y：下方不可见 -> 将其底边贴到可见区域底边；上方不可见 -> 将其顶边贴到可见区域顶边
+    var targetY = visible.origin.y
+    if docRect.maxY > visible.maxY + epsilon {
+      targetY = docRect.maxY - visible.size.height
+    } else if docRect.minY < visible.minY - epsilon {
+      targetY = docRect.minY
+    }
+    // 限制最小为 0，其余上界交由系统夹取即可
+    targetY = max(0, targetY)
+
+    // 设置滚动；为避免触发滚动观察回调造成递归，这里加保护标记
+    guard Self.isUpdatingFromScroll == false else { return }
+    Self.isUpdatingFromScroll = true
+    clipView.scroll(to: NSPoint(x: visible.origin.x, y: targetY))
+    view.candidateScrollView.reflectScrolledClipView(clipView)
+    Self.isUpdatingFromScroll = false
+  }
 
   @objc func handleClipViewBoundsChanged(_ notification: Notification) {
     guard !Self.isUpdatingFromScroll else { return }
