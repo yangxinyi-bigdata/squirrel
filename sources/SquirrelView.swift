@@ -1695,24 +1695,25 @@ private extension SquirrelView {
     let baseY = yBefore + candInset.height - halfLinespace
     highlightedRect.origin = NSPoint(x: backgroundRect.origin.x, y: seamTop + baseY)
     if DEBUG_LAYOUT_LOGS { print("[SquirrelView.drawPathCandidate] simple anchored to seamTop=\(seamTop) baseY=\(baseY) from y=\(yBefore) -> y=\(highlightedRect.origin.y)") }
-        // 进一步修正：如果这是首个候选项，则将顶部精确对齐到 innerBox.minY，避免顶部空隙与错位
+        // 进一步修正：如果这是首个候选项，仅当其顶部“接近” seam 时才做 2px 上叠覆盖，
+        // 否则保持自然 y（随滚动移动）。
         if preeditRange.length > 0, let first = candidateRanges.first, first.location == highlightedRange.location {
-          let oldY = highlightedRect.origin.y
-          highlightedRect.origin.y = innerBox.origin.y
-          if DEBUG_LAYOUT_LOGS { print("[SquirrelView.drawPathCandidate] simple first-candidate top-align: y \(oldY) -> \(highlightedRect.origin.y) (innerBox.minY)") }
-          // 额外：为消除可能的发丝缝隙，向上微重叠 2 物理像素
-          let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
-          let overlap = 2.0 / scale
-          highlightedRect.origin.y -= overlap
-          highlightedRect.size.height += overlap
-          if DEBUG_LAYOUT_LOGS { print("[SquirrelView.drawPathCandidate] simple first-candidate seam overlap: -\(overlap)pt (\(Int(2))px @ scale=\(scale)) -> rect=\(highlightedRect)") }
-          // 关键：expand() 会把低于 innerBox.minY 的点钳回 outerBox.minY。
-          // 为允许这次“上叠”生效，将 innerBox/outerBox 的顶部同时下移 overlap，使阈值同步下沉。
-          innerBox.origin.y -= overlap
-          innerBox.size.height += overlap
-          outerBox.origin.y -= overlap
-          outerBox.size.height += overlap
-          if DEBUG_LAYOUT_LOGS { print("[SquirrelView.drawPathCandidate] simple adjust borders for overlap: inner.minY=\(innerBox.minY) outer.minY=\(outerBox.minY)") }
+          let epsilon: CGFloat = 0.75 // 允许的对齐误差范围（pt）
+          let deltaToSeam = highlightedRect.origin.y - innerBox.minY
+          if abs(deltaToSeam) <= epsilon {
+            let oldY = highlightedRect.origin.y
+            // 不再强制置为 innerBox.minY，只进行轻微上叠覆盖
+            let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+            let overlap = 2.0 / scale
+            highlightedRect.origin.y -= overlap
+            highlightedRect.size.height += overlap
+            // 同步边界，避免 expand() 将上叠钳回
+            innerBox.origin.y -= overlap
+            innerBox.size.height += overlap
+            outerBox.origin.y -= overlap
+            outerBox.size.height += overlap
+            if DEBUG_LAYOUT_LOGS { print("[SquirrelView.drawPathCandidate] simple first-candidate near seam (|Δ|=\(abs(deltaToSeam))) apply overlap: y \(oldY) -> \(highlightedRect.origin.y) (overlap=\(overlap))") }
+          }
         }
         if DEBUG_LAYOUT_LOGS { print("[SquirrelView.drawPathCandidate] simple highlightedRect(adjusted)=\(highlightedRect)") }
         

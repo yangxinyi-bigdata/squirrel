@@ -92,6 +92,9 @@ final class SquirrelPanel: NSPanel {
   private var page: Int = 0                 // 当前页码
   private var lastPage: Bool = true         // 是否是最后一页
   private var pagingUp: Bool?               // 是否正在向上翻页
+  // 仅当内容发生变化（比如输入或翻页）时，下一次 show() 才会把滚动位置重置到顶部。
+  // 防止在滚动或鼠标悬停高亮变化时把用户滚动位置强行跳回顶部。
+  private var shouldAutoScrollToTop: Bool = true
 
   // 初始化函数，创建一个新的鼠须管面板
   // position 参数指定面板在屏幕上的初始位置
@@ -124,6 +127,10 @@ final class SquirrelPanel: NSPanel {
   contentView.addSubview(view.preeditScrollView)
   contentView.addSubview(view.candidateScrollView)
     self.contentView = contentView       // 设置为面板的内容视图
+
+  // 监听候选与预编辑区域的滚动（ClipView 边界变化），用于在滚动时让“悬停高亮”实时跟随
+  NotificationCenter.default.addObserver(self, selector: #selector(handleClipViewBoundsChanged(_:)), name: NSView.boundsDidChangeNotification, object: view.candidateScrollView.contentView)
+  NotificationCenter.default.addObserver(self, selector: #selector(handleClipViewBoundsChanged(_:)), name: NSView.boundsDidChangeNotification, object: view.preeditScrollView.contentView)
   }
 
   // 以下是一些计算属性，用来快速获取当前主题的设置
@@ -204,13 +211,14 @@ final class SquirrelPanel: NSPanel {
       // 如果鼠标位于某个可滚动区域且内容溢出，则把事件交给该区域处理并提前返回，避免误触发翻页
       do {
         let pt = mousePosition()
+        var forwarded = false
         if view.preeditScrollView.frame.contains(pt), let dr = view.preeditTextView.textLayoutManager?.documentRange {
           let docH = view.contentRectPreedit(range: dr).height
           // 以可见文本区域（扣除上下内边距）作为阈值
           let visibleH = max(0, view.preeditScrollView.bounds.height - view.currentTheme.edgeInset.height * 2)
           if docH > visibleH + 0.5 {
             super.sendEvent(event)
-            return
+            forwarded = true
           }
         }
         if view.candidateScrollView.frame.contains(pt), let dr = view.candidateTextView.textLayoutManager?.documentRange {
@@ -218,8 +226,19 @@ final class SquirrelPanel: NSPanel {
           let visibleH = max(0, view.candidateScrollView.bounds.height - view.currentTheme.edgeInset.height * 2)
           if docH > visibleH + 0.5 {
             super.sendEvent(event)
-            return
+            forwarded = true
           }
+        }
+        if forwarded {
+          // 滚动后根据当前鼠标位置更新“悬停高亮”索引，让高亮与候选一起滚动
+          let (idx, _, _) = view.click(at: mousePosition())
+          if let idx, idx >= 0 && idx < candidates.count, cursorIndex != idx {
+            update(preedit: preedit, selRange: selRange, caretPos: caretPos, candidates: candidates, comments: comments, labels: labels, highlighted: idx, page: page, lastPage: lastPage, update: false)
+          } else {
+            // 仅触发重绘，保证高亮路径按新的滚动偏移重算
+            view.needsDisplay = true
+          }
+          return
         }
       }
       if event.phase == .began {  // 滚动开始
@@ -294,6 +313,8 @@ final class SquirrelPanel: NSPanel {
       self.index = index           // 选中索引
       self.page = page             // 页码
       self.lastPage = lastPage     // 是否最后一页
+      // 数据真正更新时，下一次展示回到列表顶部
+      shouldAutoScrollToTop = true
     }
     cursorIndex = index  // 更新鼠标悬停索引
 
@@ -313,7 +334,11 @@ final class SquirrelPanel: NSPanel {
       return  // 提前返回，不继续处理候选字显示
     }
 
-    let theme = view.currentTheme  // 获取当前主题
+  let theme = view.currentTheme  // 获取当前主题
+  // 在仅变更高亮（update=false）或滚动驱动的刷新时，保存滚动位置，避免重设文本后被系统复位到顶部
+  let preserveOffsets = !update
+  let preeditOffsetBefore = view.preeditScrollView.contentView.bounds.origin
+  let candidateOffsetBefore = view.candidateScrollView.contentView.bounds.origin
     currentScreen()               // 更新当前屏幕信息
 
     // 创建富文本对象，用来存储所有要显示的文本和样式
@@ -491,6 +516,14 @@ final class SquirrelPanel: NSPanel {
     // 🚀 步骤5: 最终显示面板到屏幕上
     // 计算面板位置、设置大小、应用主题样式，并将面板显示给用户
     show()
+
+    // 恢复滚动位置（仅当不是“内容更新触发的自动回顶”场景）
+    if preserveOffsets && !shouldAutoScrollToTop {
+      view.preeditScrollView.contentView.scroll(to: preeditOffsetBefore)
+      view.preeditScrollView.reflectScrolledClipView(view.preeditScrollView.contentView)
+      view.candidateScrollView.contentView.scroll(to: candidateOffsetBefore)
+      view.candidateScrollView.reflectScrolledClipView(view.candidateScrollView.contentView)
+    }
   }
 
   // 更新状态消息的函数
@@ -531,6 +564,28 @@ final class SquirrelPanel: NSPanel {
 
 // 私有扩展，包含内部使用的辅助方法
 private extension SquirrelPanel {
+  // 防止滚动导致的高亮刷新递归
+  private static var isUpdatingFromScroll = false
+
+  @objc func handleClipViewBoundsChanged(_ notification: Notification) {
+    guard !Self.isUpdatingFromScroll else { return }
+    // 仅当鼠标在候选区域内且内容发生滚动时，才根据鼠标位置更新高亮
+    let pt = mousePosition()
+    guard view.candidateScrollView.frame.contains(pt) else {
+      // 只是触发重绘，让高亮路径跟随滚动偏移
+      view.needsDisplay = true
+      return
+    }
+    Self.isUpdatingFromScroll = true
+    defer { Self.isUpdatingFromScroll = false }
+    let (idx, _, _) = view.click(at: pt)
+    if let idx, idx >= 0 && idx < candidates.count, cursorIndex != idx {
+      // 滚动驱动的高亮切换不应重置滚动位置
+      update(preedit: preedit, selRange: selRange, caretPos: caretPos, candidates: candidates, comments: comments, labels: labels, highlighted: idx, page: page, lastPage: lastPage, update: false)
+    } else {
+      view.needsDisplay = true
+    }
+  }
   // 获取鼠标在面板中的位置
   func mousePosition() -> NSPoint {
     var point = NSEvent.mouseLocation      // 获取鼠标在屏幕上的位置
@@ -736,9 +791,11 @@ private extension SquirrelPanel {
       tv.autoresizingMask = [.width, .height]
     }
     // 清零滚动偏移（即刻生效，避免旧状态残留）
-    for sv in [view.preeditScrollView, view.candidateScrollView] {
-      sv.contentView.scroll(to: NSPoint(x: 0, y: 0))
-      sv.reflectScrolledClipView(sv.contentView)
+    if shouldAutoScrollToTop {
+      for sv in [view.preeditScrollView, view.candidateScrollView] {
+        sv.contentView.scroll(to: NSPoint(x: 0, y: 0))
+        sv.reflectScrolledClipView(sv.contentView)
+      }
     }
 
     // 重新计算分区高度并设置滚动条（与 draw 中保持一致）
@@ -801,8 +858,10 @@ private extension SquirrelPanel {
   view.candidateScrollView.hasVerticalScroller = candidateExceedsVisible
 
   // 最终再次将候选区滚动到顶部以避免初始偏移导致的“首项空白”
-  view.candidateScrollView.contentView.scroll(to: NSPoint(x: 0, y: 0))
-  view.candidateScrollView.reflectScrolledClipView(view.candidateScrollView.contentView)
+  if shouldAutoScrollToTop {
+    view.candidateScrollView.contentView.scroll(to: NSPoint(x: 0, y: 0))
+    view.candidateScrollView.reflectScrolledClipView(view.candidateScrollView.contentView)
+  }
     if DEBUG_LAYOUT_LOGS {
       print("[Panel.show] Frames(after): preeditSV=\(view.preeditScrollView.frame) candSV=\(view.candidateScrollView.frame)")
       print("[Panel.show] Clip offsets: preedit=\(view.preeditScrollView.contentView.bounds.origin) candidate=\(view.candidateScrollView.contentView.bounds.origin)")
@@ -829,6 +888,8 @@ private extension SquirrelPanel {
       let maskBBox = view.shape.path?.boundingBox ?? .zero
       print("[Panel.show] Audit outer: contentBounds=\(contentView!.bounds) back.frame=\(back.frame) view.bounds=\(view.bounds) maskBBox=\(maskBBox)")
     }
+  // 完成一次展示后，取消自动回顶的待执行标记
+  shouldAutoScrollToTop = false
     // voila! - 大功告成！
   }
 
