@@ -596,7 +596,7 @@ final class SquirrelView: NSView {
     }
 
     // 绘制预编辑文本矩形区域
-    var preeditRect = NSRect.zero
+  var preeditRect = NSRect.zero
     if preeditRange.length > 0, let preeditTextRange = convertPreedit(range: preeditRange) {
       // 计算预编辑文本的显示区域
       preeditRect = contentRectPreedit(range: preeditTextRange)
@@ -611,9 +611,38 @@ final class SquirrelView: NSView {
         preeditRect.size.height += theme.edgeInset.height - theme.preeditLinespace / 2 - theme.hilitedCornerRadius / 2
       }
       
-      // 调整包含区域，为预编辑文本让出空间
-      containingRect.size.height -= preeditRect.size.height
-      containingRect.origin.y += preeditRect.size.height
+  // === 对齐调试：preedit 容器与内容的上下边界 ===
+  let preeditSV = preeditScrollView
+  let clip = preeditSV.contentView
+  let tv = preeditTextView
+  let svFrame = preeditSV.frame
+  let clipBounds = clip.bounds
+  let clipRectInSelf = clip.convert(clip.bounds, to: self)
+  let tvBoundsInSelf = tv.convert(tv.bounds, to: self)
+  var docRectInSelf = NSRect.zero
+  if let pr = convertPreedit(range: preeditRange) { docRectInSelf = contentRectPreedit(range: pr) }
+
+  // 以 clipView 的底边为“分区缝”（与设备像素对齐），统一作为候选顶部参考
+  let clipBottomInSelf = clipRectInSelf.maxY
+  let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+  let seamY = (clipBottomInSelf * scale).rounded() / scale
+  // 将 seam 反写到 preeditRect.height，确保后续 inner/outerBox 也使用一致的顶部
+  preeditRect.size.height = seamY
+  // 最终确定候选区的顶部和高度：严格使用 seam 和 candidateScrollView 的高度
+  containingRect.origin.y = seamY
+  containingRect.size.height = candidateScrollView.frame.size.height
+  print("🧩 [Preedit Align] enforce containingRect top=seamY=\(seamY) height=candidateSV.h=\(candidateScrollView.frame.size.height)")
+  print("🧩 [Preedit Align] seam(device-aligned)=\(seamY) scale=\(scale)")
+
+  print("🧩 [Preedit Align] sv.frame=\(svFrame) sv.maxY=\(svFrame.maxY)")
+  print("🧩 [Preedit Align] clip.bounds=\(clipBounds) clipInSelf=\(clipRectInSelf)")
+  print("🧩 [Preedit Align] tv.boundsInSelf=\(tvBoundsInSelf) tv.maxYInSelf=\(tvBoundsInSelf.maxY)")
+  print("🧩 [Preedit Align] docRectInSelf=\(docRectInSelf) doc.maxY=\(docRectInSelf.maxY)")
+  print("🧩 [Preedit Align] preeditRect=\(preeditRect) preeditRect.maxY=\(preeditRect.maxY)")
+  let gapSVvsPreeditRect = svFrame.maxY - preeditRect.maxY
+  let gapClipVsPreeditRect = clipRectInSelf.maxY - preeditRect.maxY
+  let gapDocVsSV = svFrame.maxY - docRectInSelf.maxY
+  print("🧩 [Preedit Align] gap: sv.maxY-preeditRect.maxY=\(gapSVvsPreeditRect), clipInSelf.maxY-preeditRect.maxY=\(gapClipVsPreeditRect), sv.maxY-doc.maxY=\(gapDocVsSV)")
       
       // 如果预编辑文本有背景颜色，创建背景路径
       if theme.preeditBackgroundColor != nil {
@@ -629,7 +658,7 @@ final class SquirrelView: NSView {
     print("   📊 包含矩形: \(containingRect)")
     print("   🎯 当前高亮索引: \(hilightedIndex)")
     
-    // 绘制候选字矩形区域
+    // 绘制候选字矩形区域p
     for i in 0..<candidateRanges.count {
       let candidate = candidateRanges[i]  // 获取当前候选字的范围
       let isHighlighted = (i == hilightedIndex)
@@ -727,14 +756,20 @@ final class SquirrelView: NSView {
       
       // ========== 第三步：根据是否有候选词调整高度 ==========
       if candidateRanges.count == 0 {
-        // 情况1：没有候选词时，上下都减去边距
-        // edgeInset.height（边缘内边距高度）：主题定义的上下内边距
+        // 情况1：没有候选词时，上下都减去边距（保持上下对称）
         innerBox.size.height -= (theme.edgeInset.height + 1) * 2
       } else {
-        // 情况2：有候选词时，只减去上边距和一些额外的间距
-        // preeditLinespace（预编辑行间距）：预编辑文本的行间距
-        // hilitedCornerRadius（高亮圆角半径）：高亮背景的圆角大小
-        innerBox.size.height -= theme.edgeInset.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2 + 2
+        // 情况2：有候选词时，仅扣除顶部内边距，让预编辑高亮的底边“贴合 seam”（无缝衔接候选区）
+        // 之前这里还额外减去了 preeditLinespace/2 + 2 等，导致底部形成约 7~9 像素的可见缝隙。
+        innerBox.size.height -= (theme.edgeInset.height + 1)
+
+        if DEBUG_LAYOUT_LOGS {
+          // 记录与 seam 的剩余距离（应接近 0）
+          let seam = preeditRect.maxY
+          let residual = max(0, seam - (innerBox.origin.y + innerBox.size.height))
+          let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+          print("🧵 [Preedit.InnerBox] with candidates: topPadding=\(theme.edgeInset.height + 1), bottomResidualToSeam=\(residual) (scale=\(scale))")
+        }
       }
       
       // ========== 第四步：计算外部边界框（outerBox）==========
@@ -878,6 +913,16 @@ final class SquirrelView: NSView {
     self.layer?.addSublayer(panelLayer)
     print("   ✅ 主面板图层已添加到视图")
 
+    // ====== 几何核查（定位“整体比外框高 ~1px”）======
+    if DEBUG_LAYOUT_LOGS {
+      let bgBBox = backgroundPath?.boundingBox ?? .zero
+      let preeditPlusCand = preeditRect.height + candidateScrollView.frame.height
+      print("🔎 [Audit] theme borderWidth=\(theme.borderWidth) borderHeight=\(theme.borderHeight) borderLineWidth=\(theme.borderLineWidth) corner=\(theme.cornerRadius) hilitedCorner=\(theme.hilitedCornerRadius)")
+      print("🔎 [Audit] dirtyRect.h=\(dirtyRect.height) backgroundRect.h=\(backgroundRect.height) bgPathBBox.h=\(bgBBox.height) preedit.h=\(preeditRect.height) candSV.h=\(candidateScrollView.frame.height) sum=\(preeditPlusCand)")
+      let heightDelta = backgroundRect.height - preeditPlusCand
+      print("🔎 [Audit] heightDelta(background - (preedit+cand))=\(heightDelta)")
+    }
+
     // ========== 🔍 调试日志：开始颜色填充 ==========
     print("🎨 [SquirrelView.draw] 开始颜色填充:")
     
@@ -1006,6 +1051,9 @@ final class SquirrelView: NSView {
 
   // 将所有路径设置到形状图层中，完成最终的界面绘制
   shape.path = panelPath
+  if DEBUG_LAYOUT_LOGS {
+    print("🔎 [Audit] shape.path bbox=\(shape.path?.boundingBox ?? .zero)")
+  }
   }
 
   // 点击检测函数：判断用户点击了哪个区域（候选字、翻页按钮等）
@@ -1609,16 +1657,31 @@ private extension SquirrelView {
         // 调整高亮矩形的尺寸和位置
         highlightedRect.size.width = backgroundRect.size.width  // 宽度占满背景
         highlightedRect.size.height += theme.linespace          // 增加行间距
-  highlightedRect.origin = NSPoint(x: backgroundRect.origin.x, y: highlightedRect.origin.y + candInset.height - halfLinespace)
-        // 当存在预编辑区域时，高亮所在的候选区实际位于其下方，需要对应上移基线。
-        if preeditRange.length > 0 {
-          highlightedRect.origin.y += preeditRect.size.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2 + 1
-        }
+    // 以候选容器顶部（seam 顶）为统一基准，消除对 preeditLinespace/圆角/常数的二次叠加导致的累计偏移
+    // 原始 y（document->self 后）再加上容器顶部 seam 与文档顶部的差值
+    let yBefore = highlightedRect.origin.y
+    let seamTop = containingRect.origin.y
+    let baseY = yBefore + candInset.height - halfLinespace
+    highlightedRect.origin = NSPoint(x: backgroundRect.origin.x, y: seamTop + baseY)
+    if DEBUG_LAYOUT_LOGS { print("[SquirrelView.drawPathCandidate] simple anchored to seamTop=\(seamTop) baseY=\(baseY) from y=\(yBefore) -> y=\(highlightedRect.origin.y)") }
         // 进一步修正：如果这是首个候选项，则将顶部精确对齐到 innerBox.minY，避免顶部空隙与错位
         if preeditRange.length > 0, let first = candidateRanges.first, first.location == highlightedRange.location {
           let oldY = highlightedRect.origin.y
           highlightedRect.origin.y = innerBox.origin.y
           if DEBUG_LAYOUT_LOGS { print("[SquirrelView.drawPathCandidate] simple first-candidate top-align: y \(oldY) -> \(highlightedRect.origin.y) (innerBox.minY)") }
+          // 额外：为消除可能的发丝缝隙，向上微重叠 2 物理像素
+          let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+          let overlap = 2.0 / scale
+          highlightedRect.origin.y -= overlap
+          highlightedRect.size.height += overlap
+          if DEBUG_LAYOUT_LOGS { print("[SquirrelView.drawPathCandidate] simple first-candidate seam overlap: -\(overlap)pt (\(Int(2))px @ scale=\(scale)) -> rect=\(highlightedRect)") }
+          // 关键：expand() 会把低于 innerBox.minY 的点钳回 outerBox.minY。
+          // 为允许这次“上叠”生效，将 innerBox/outerBox 的顶部同时下移 overlap，使阈值同步下沉。
+          innerBox.origin.y -= overlap
+          innerBox.size.height += overlap
+          outerBox.origin.y -= overlap
+          outerBox.size.height += overlap
+          if DEBUG_LAYOUT_LOGS { print("[SquirrelView.drawPathCandidate] simple adjust borders for overlap: inner.minY=\(innerBox.minY) outer.minY=\(outerBox.minY)") }
         }
         if DEBUG_LAYOUT_LOGS { print("[SquirrelView.drawPathCandidate] simple highlightedRect(adjusted)=\(highlightedRect)") }
         
@@ -1634,9 +1697,8 @@ private extension SquirrelView {
             highlightedRect.size.height += candInset.height - halfLinespace
             highlightedRect.origin.y -= candInset.height - halfLinespace
           } else {
-            // 有预编辑文本时的调整
-            highlightedRect.size.height += theme.hilitedCornerRadius / 2
-            highlightedRect.origin.y -= theme.hilitedCornerRadius / 2
+      // 有预编辑文本时：不再额外叠加圆角补偿，避免首行以外候选的累计误差
+      // 保持与首项的一致：顶部贴合逻辑仅在上面的 first-candidate 分支执行
           }
         }
 
@@ -1652,20 +1714,25 @@ private extension SquirrelView {
     } else {
       resultingPath = nil  // 无法转换文本范围时不绘制
     }
+    if DEBUG_LAYOUT_LOGS, let p = resultingPath {
+      let bb = p.boundingBox
+      let seamTop = preeditRect.maxY
+      print("[SquirrelView.drawPathCandidate] bbox minY=\(bb.minY) maxY=\(bb.maxY) height=\(bb.height) seamTop(preedit.maxY)=\(seamTop) deltaTop=\(seamTop - bb.minY)")
+    }
     return resultingPath  // 返回最终的绘制路径
   }
 
-  // 雕刻内边距：从矩形中减去内边距和边框宽度，创建实际内容区域
-  // 这个函数确保文本内容不会绘制到边框或圆角区域
+  // 雕刻内边距：仅收缩左右与底边，保留顶部 y 不变，避免破坏与预编辑的无缝“分区缝”。
   func carveInset(rect: NSRect) -> NSRect {
-    var newRect = rect  // 复制原始矩形
-    // 高度和宽度都要减去两倍的（圆角半径 + 边框宽度），因为上下左右都有
-    newRect.size.height -= (currentTheme.hilitedCornerRadius + currentTheme.borderWidth) * 2
-    newRect.size.width -= (currentTheme.hilitedCornerRadius + currentTheme.borderWidth) * 2
-    // 起始位置要向内偏移（圆角半径 + 边框宽度）的距离
-    newRect.origin.x += currentTheme.hilitedCornerRadius + currentTheme.borderWidth
-    newRect.origin.y += currentTheme.hilitedCornerRadius + currentTheme.borderWidth
-    return newRect  // 返回雕刻后的矩形
+    var newRect = rect
+  // 同时考虑 borderLineWidth（实际描边宽度），否则会出现 0.5~1px 的可见高度残差
+  let inset = currentTheme.hilitedCornerRadius + currentTheme.borderWidth
+  let stroke = currentTheme.borderLineWidth
+  newRect.size.height -= (inset + stroke)   // 仅减少底边高度（顶部 seam 不动）
+    newRect.size.width -= inset * 2           // 左右都缩进
+    newRect.origin.x += inset                 // 左侧右移
+    // 注意：不修改 origin.y，以保持顶部 seam 完整贴合
+    return newRect
   }
 
   // 创建一个等边三角形的顶点数组，用于绘制翻页按钮

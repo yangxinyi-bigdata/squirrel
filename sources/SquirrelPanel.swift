@@ -771,6 +771,17 @@ private extension SquirrelPanel {
     view.candidateScrollView.frame.origin.y = contentView!.bounds.minY
     view.candidateScrollView.frame.size.height = max(0, contentView!.bounds.height - view.preeditScrollView.frame.height)
 
+    // 重要：在最终确定滚动容器尺寸后，再次将 NSTextView 的 frame 同步为各自滚动容器的最终 bounds，
+    // 避免早先同步发生在“还未分区前”的旧尺寸上，造成 TextView 与 ClipView 之间出现 5~9px 的错位/缝隙。
+    view.preeditTextView.frame = view.preeditScrollView.bounds
+    view.preeditTextView.setBoundsSize(view.preeditScrollView.bounds.size)
+    view.candidateTextView.frame = view.candidateScrollView.bounds
+    view.candidateTextView.setBoundsSize(view.candidateScrollView.bounds.size)
+    if DEBUG_LAYOUT_LOGS {
+      print("[Panel.show] Resynced textView frames: preeditTV=\(view.preeditTextView.frame) candTV=\(view.candidateTextView.frame)")
+      print("[Panel.show] Resynced textView bounds: preeditTV=\(view.preeditTextView.bounds) candTV=\(view.candidateTextView.bounds)")
+    }
+
     // doc heights
     let candidateDocHeight: CGFloat = {
       if let dr = view.candidateTextView.textLayoutManager?.documentRange { return view.contentRect(range: dr).height } else { return 0 }
@@ -813,6 +824,10 @@ private extension SquirrelPanel {
     alphaValue = theme.alpha  // 设置面板透明度
     invalidateShadow()        // 刷新阴影
     orderFront(nil)           // 将面板显示到最前面
+    if DEBUG_LAYOUT_LOGS {
+      let maskBBox = view.shape.path?.boundingBox ?? .zero
+      print("[Panel.show] Audit outer: contentBounds=\(contentView!.bounds) back.frame=\(back.frame) view.bounds=\(view.bounds) maskBBox=\(maskBBox)")
+    }
     // voila! - 大功告成！
   }
 
