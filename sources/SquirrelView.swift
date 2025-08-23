@@ -602,7 +602,8 @@ final class SquirrelView: NSView {
       preeditRect = contentRectPreedit(range: preeditTextRange)
       preeditRect.size.width = backgroundRect.size.width  // 宽度占满背景区域
       // 调整高度，包含边距和行间距
-      preeditRect.size.height += theme.edgeInset.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2
+  // 预编辑区域高度：文档高度 + 顶部内边距与半行距（去除圆角额外补偿，确保与候选区严丝合缝）
+  preeditRect.size.height += theme.edgeInset.height + theme.preeditLinespace / 2
       preeditRect.origin = backgroundRect.origin
       
       // 如果没有候选字，调整预编辑区域的高度
@@ -1534,7 +1535,9 @@ private extension SquirrelView {
     currentContainingRect.origin.x -= extraExpansion         // 向左扩展
     currentContainingRect.origin.y -= extraExpansion         // 向上扩展
 
-    let halfLinespace = theme.linespace / 2  // 半行间距，用于精确定位
+  let halfLinespace = theme.linespace / 2  // 半行间距，用于精确定位
+  // 使用实际 inset（候选区垂直 inset 可能为 0）
+  let candInset = candidateTextView.textContainerInset
 
     // 计算内边界框，这是文本实际绘制的区域
     var innerBox = backgroundRect
@@ -1544,26 +1547,26 @@ private extension SquirrelView {
     innerBox.origin.y -= extraExpansion                                            // 向下调整
     
     if preeditRange.length == 0 {
-      // 没有预编辑文本时的调整
-      innerBox.origin.y += theme.edgeInset.height + 1
-      innerBox.size.height -= (theme.edgeInset.height + 1) * 2
+      // 无预编辑：顶部从面板内边距开始（去除额外+1像素），底部留出下边内边距
+  innerBox.origin.y += candInset.height
+  innerBox.size.height -= (candInset.height + theme.edgeInset.height)
     } else {
-      // 有预编辑文本时需要为其留出空间
-      innerBox.origin.y += preeditRect.size.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2 + 1
-      innerBox.size.height -= theme.edgeInset.height + preeditRect.size.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2 + 2
+      // 有预编辑：候选区顶部精确贴到预编辑区域底部
+      innerBox.origin.y += preeditRect.size.height
+  innerBox.size.height -= candInset.height + preeditRect.size.height
     }
-    innerBox.size.height -= theme.linespace  // 扣除行间距
-    innerBox.origin.y += halfLinespace       // 调整垂直位置
+    // 注意：不再对 innerBox 进行半行距的二次位移，避免在首行产生视觉缝隙
     if DEBUG_LAYOUT_LOGS {
       print("[SquirrelView.drawPathCandidate] innerBox=\(innerBox)")
     }
 
     // 计算外边界框，这是高亮效果的最大范围
     var outerBox = backgroundRect
-    outerBox.size.height -= preeditRect.size.height + max(0, theme.hilitedCornerRadius + theme.borderLineWidth) - 2 * extraExpansion
-    outerBox.size.width -= max(0, theme.hilitedCornerRadius + theme.borderLineWidth) - 2 * extraExpansion
-    outerBox.origin.x += max(0.0, theme.hilitedCornerRadius + theme.borderLineWidth) / 2.0 - extraExpansion
-    outerBox.origin.y += preeditRect.size.height + max(0, theme.hilitedCornerRadius + theme.borderLineWidth) / 2 - extraExpansion
+  // 外边界同样将顶部对齐至预编辑底部，去除圆角/边框的半径补偿，确保无缝衔接
+  outerBox.size.height -= preeditRect.size.height - 2 * extraExpansion
+  outerBox.size.width -= max(0, theme.hilitedCornerRadius + theme.borderLineWidth) - 2 * extraExpansion
+  outerBox.origin.x += max(0.0, theme.hilitedCornerRadius + theme.borderLineWidth) / 2.0 - extraExpansion
+  outerBox.origin.y += preeditRect.size.height - extraExpansion
 
     // 计算有效的圆角半径，考虑扩展效果
     let effectiveRadius = max(0, theme.hilitedCornerRadius + 2 * extraExpansion / theme.hilitedCornerRadius * max(0, theme.cornerRadius - theme.hilitedCornerRadius))
@@ -1606,7 +1609,7 @@ private extension SquirrelView {
         // 调整高亮矩形的尺寸和位置
         highlightedRect.size.width = backgroundRect.size.width  // 宽度占满背景
         highlightedRect.size.height += theme.linespace          // 增加行间距
-        highlightedRect.origin = NSPoint(x: backgroundRect.origin.x, y: highlightedRect.origin.y + theme.edgeInset.height - halfLinespace)
+  highlightedRect.origin = NSPoint(x: backgroundRect.origin.x, y: highlightedRect.origin.y + candInset.height - halfLinespace)
         // 当存在预编辑区域时，高亮所在的候选区实际位于其下方，需要对应上移基线。
         if preeditRange.length > 0 {
           highlightedRect.origin.y += preeditRect.size.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2 + 1
@@ -1621,15 +1624,15 @@ private extension SquirrelView {
         
         // 如果高亮到了文本末尾，额外增加底部空间
         if highlightedRange.upperBound == (textView.string as NSString).length {
-          highlightedRect.size.height += theme.edgeInset.height - halfLinespace
+          highlightedRect.size.height += candInset.height - halfLinespace
         }
         
         // 如果高亮从文本开始位置开始，额外增加顶部空间
         if highlightedRange.location - (preeditRange == .empty ? 0 : preeditRange.upperBound) <= 1 {
           if preeditRange.length == 0 {
             // 没有预编辑文本时的调整
-            highlightedRect.size.height += theme.edgeInset.height - halfLinespace
-            highlightedRect.origin.y -= theme.edgeInset.height - halfLinespace
+            highlightedRect.size.height += candInset.height - halfLinespace
+            highlightedRect.origin.y -= candInset.height - halfLinespace
           } else {
             // 有预编辑文本时的调整
             highlightedRect.size.height += theme.hilitedCornerRadius / 2

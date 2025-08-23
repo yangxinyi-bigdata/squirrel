@@ -275,7 +275,7 @@ final class SquirrelPanel: NSPanel {
     maxHeight = 0             // 重置最大高度
   }
 
-  // 主要的更新函数，用来添加文本属性并显示来自 librime 的输出　
+  // 主要的更新函数，用来添加文本属性并显示来自 librime 的输出nijhn=
   // 这是整个面板最核心的函数，就像画家的调色板，把各种元素组合成最终的显示效果
   // swiftlint:disable:next cyclomatic_complexity function_parameter_count
   func update(preedit: String, selRange: NSRange, caretPos: Int, candidates: [String], comments: [String], labels: [String], highlighted index: Int, page: Int, lastPage: Bool, update: Bool) {
@@ -652,8 +652,9 @@ private extension SquirrelPanel {
       print("   🏁 最终 preeditDocHeight: \(preeditDocHeight)")
       print("   ----------------------------------------")
       
+      // 与 SquirrelView.draw 中 preeditRect.size.height 的组成保持一致：仅使用顶部内边距和半行距，不再叠加圆角补偿
       let preeditPadding = (view.preeditRange.length > 0)
-        ? (theme.edgeInset.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2)
+        ? (theme.edgeInset.height + theme.preeditLinespace / 2)
         : 0
       // 注意：与 draw() 的 preeditRect.size.height 匹配，不再额外添加额外的底部修正项
       let preeditFrameHeightNatural = (view.preeditRange.length > 0)
@@ -719,8 +720,9 @@ private extension SquirrelPanel {
     view.preeditScrollView.frame.origin.x += theme.pagingOffset
     view.candidateScrollView.frame.origin.x += theme.pagingOffset
     // 内边距
-    view.preeditTextView.textContainerInset = theme.edgeInset
-    view.candidateTextView.textContainerInset = theme.edgeInset
+  view.preeditTextView.textContainerInset = theme.edgeInset
+  // 候选区：取消垂直内边距，仅保留水平内边距，避免首行与容器顶部的空隙
+  view.candidateTextView.textContainerInset = NSSize(width: theme.edgeInset.width, height: 0)
       if DEBUG_LAYOUT_LOGS {
         print("[Panel.show] Frames(before): content=\(contentView!.bounds) preeditSV=\(view.preeditScrollView.frame) candSV=\(view.candidateScrollView.frame)")
         print("[Panel.show] Insets preedit=\(view.preeditTextView.textContainerInset) candidate=\(view.candidateTextView.textContainerInset) pagingOffset=\(theme.pagingOffset)")
@@ -756,8 +758,9 @@ private extension SquirrelPanel {
     print("   ----------------------------------------")
     
     // 视觉上的额外上下边距（与 draw 中一致）
+    // 同步 draw()：不包含圆角额外补偿，保证上下边界严丝合缝
     let preeditPadding = (view.preeditRange.length > 0)
-      ? (theme.edgeInset.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2)
+      ? (theme.edgeInset.height + theme.preeditLinespace / 2)
       : 0
     let preeditFrameHeightNatural = (view.preeditRange.length > 0) ? (preeditDocHeight + preeditPadding) : 0
     let preeditFrameHeightCapped = min(preeditFrameHeightNatural, theme.maxPreeditHeight ?? preeditFrameHeightNatural)
@@ -775,8 +778,8 @@ private extension SquirrelPanel {
   // 显示滚动条（独立判断两区是否溢出）
   let preeditExceedsCap = preeditFrameHeightNatural > preeditFrameHeightCapped + 0.5
   // 预编辑区域的可见文本高度 = 实际 frame 高度 - 上部额外 padding（和 draw 完全一致），若候选为空，底部还会有一点额外空间
-  let preeditTopPadding = (view.preeditRange.length > 0) ? (theme.edgeInset.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2) : 0
-  let preeditBottomExtra = (candidates.isEmpty && view.preeditRange.length > 0) ? max(0, theme.edgeInset.height - theme.preeditLinespace / 2 - theme.hilitedCornerRadius / 2) : 0
+  let preeditTopPadding = (view.preeditRange.length > 0) ? (theme.edgeInset.height + theme.preeditLinespace / 2) : 0
+  let preeditBottomExtra = (candidates.isEmpty && view.preeditRange.length > 0) ? max(0, theme.edgeInset.height - theme.preeditLinespace / 2) : 0
   let preeditVisibleText = max(0, view.preeditScrollView.bounds.height - preeditTopPadding - preeditBottomExtra)
   let preeditExceedsVisible = preeditDocHeight > preeditVisibleText + 0.5
   view.preeditScrollView.hasVerticalScroller = (view.preeditScrollView.frame.height > 0) && (preeditExceedsCap || preeditExceedsVisible)
