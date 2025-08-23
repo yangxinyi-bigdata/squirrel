@@ -284,7 +284,8 @@ final class SquirrelView: NSView {
 
   @objc private func handleClipViewBoundsChanged(_ notification: Notification) {
     // 滚动时请求重绘，使蓝色高亮背景与文本滚动同步
-    self.needsDisplay = true
+  // 仅触发重绘，不修改 textView 的 bounds/frame，避免缩放态叠加
+  self.needsDisplay = true
   }
 
   // 重写坐标系属性，设置为翻转坐标系

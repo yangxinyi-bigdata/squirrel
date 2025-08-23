@@ -771,12 +771,13 @@ private extension SquirrelPanel {
     view.candidateScrollView.frame.origin.y = contentView!.bounds.minY
     view.candidateScrollView.frame.size.height = max(0, contentView!.bounds.height - view.preeditScrollView.frame.height)
 
-    // 重要：在最终确定滚动容器尺寸后，再次将 NSTextView 的 frame 同步为各自滚动容器的最终 bounds，
-    // 避免早先同步发生在“还未分区前”的旧尺寸上，造成 TextView 与 ClipView 之间出现 5~9px 的错位/缝隙。
-    view.preeditTextView.frame = view.preeditScrollView.bounds
-    view.preeditTextView.setBoundsSize(view.preeditScrollView.bounds.size)
-    view.candidateTextView.frame = view.candidateScrollView.bounds
-    view.candidateTextView.setBoundsSize(view.candidateScrollView.bounds.size)
+  // 重要：在最终确定滚动容器尺寸后，再次将 NSTextView 的 frame 同步为各自滚动容器的最终 bounds。
+  // 注意：不要使用 setBoundsSize 在每次刷新时反复改写坐标系尺寸，否则会触发坐标系缩放累积，
+  // 导致出现“滚动/鼠标滑过后文字越来越大”的现象。这里改为将 bounds 直接重置为 (0,0, frame.size)。
+  view.preeditTextView.frame = view.preeditScrollView.bounds
+  view.preeditTextView.bounds = NSRect(origin: .zero, size: view.preeditTextView.frame.size)
+  view.candidateTextView.frame = view.candidateScrollView.bounds
+  view.candidateTextView.bounds = NSRect(origin: .zero, size: view.candidateTextView.frame.size)
     if DEBUG_LAYOUT_LOGS {
       print("[Panel.show] Resynced textView frames: preeditTV=\(view.preeditTextView.frame) candTV=\(view.candidateTextView.frame)")
       print("[Panel.show] Resynced textView bounds: preeditTV=\(view.preeditTextView.bounds) candTV=\(view.candidateTextView.bounds)")
