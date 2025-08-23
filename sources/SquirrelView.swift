@@ -98,6 +98,8 @@ extension NSAttributedString.Key {
 // final 表示这个类不能被继承，NSView 是 macOS 视图的基类
 // 这个类就像一个特殊的画布，专门用来绘制输入法候选字
 final class SquirrelView: NSView {
+  // 调试总开关：打印关键几何/路径计算日志
+  private let DEBUG_LAYOUT_LOGS = true
   // 类的属性定义，就像这个视图的各种特征和工具
   // 拆分为两个独立区域的视图
   let preeditTextView: NSTextView
@@ -587,6 +589,11 @@ final class SquirrelView: NSView {
     print("   📦 调整后 containingRect: \(containingRect)")
     print("   📦 backgroundRect: \(backgroundRect)")
     print("   ----------------------------------------")
+    if DEBUG_LAYOUT_LOGS {
+      print("   🧭 ScrollOffsets preedit=\(preeditScrollOffset) candidate=\(candidateScrollOffset)")
+      print("   🧱 Frames preeditSV=\(preeditScrollView.frame) candidateSV=\(candidateScrollView.frame)")
+      print("   🧊 Insets preedit=\(preeditTextView.textContainerInset) candidate=\(candidateTextView.textContainerInset)")
+    }
 
     // 绘制预编辑文本矩形区域
     var preeditRect = NSRect.zero
@@ -613,7 +620,8 @@ final class SquirrelView: NSView {
       }
     }
 
-    containingRect = carveInset(rect: containingRect)  // 雕刻内边距
+  containingRect = carveInset(rect: containingRect)  // 雕刻内边距
+  if DEBUG_LAYOUT_LOGS { print("   ✂️ carved containingRect=\(containingRect)") }
     
     // ========== 🔍 调试日志：候选字绘制循环开始 ==========
     print("🎨 [SquirrelView.draw] 开始绘制候选字:")
@@ -624,6 +632,12 @@ final class SquirrelView: NSView {
     for i in 0..<candidateRanges.count {
       let candidate = candidateRanges[i]  // 获取当前候选字的范围
       let isHighlighted = (i == hilightedIndex)
+      if DEBUG_LAYOUT_LOGS && i == 0 {
+        if let tr = convert(range: candidate) {
+          let r = contentRect(range: tr)
+          print("   🔎 firstCandidate contentRect=\(r)")
+        }
+      }
       
       // ========== 🔍 调试日志：每个候选字的处理 ==========
       print("   📝 处理候选字[\(i)]:")
@@ -1509,6 +1523,9 @@ private extension SquirrelView {
   func drawPathCandidate(highlightedRange: NSRange, backgroundRect: NSRect, preeditRect: NSRect, containingRect: NSRect, extraExpansion: Double) -> CGPath? {
     let theme = currentTheme        // 获取当前主题
     let resultingPath: CGMutablePath?  // 最终的绘制路径
+    if DEBUG_LAYOUT_LOGS {
+      print("[SquirrelView.drawPathCandidate] in range=\(highlightedRange) bg=\(backgroundRect) preedit=\(preeditRect) contain=\(containingRect) extra=\(extraExpansion)")
+    }
 
     // 计算当前包含矩形，考虑额外扩展
     var currentContainingRect = containingRect
@@ -1537,6 +1554,9 @@ private extension SquirrelView {
     }
     innerBox.size.height -= theme.linespace  // 扣除行间距
     innerBox.origin.y += halfLinespace       // 调整垂直位置
+    if DEBUG_LAYOUT_LOGS {
+      print("[SquirrelView.drawPathCandidate] innerBox=\(innerBox)")
+    }
 
     // 计算外边界框，这是高亮效果的最大范围
     var outerBox = backgroundRect
@@ -1547,12 +1567,18 @@ private extension SquirrelView {
 
     // 计算有效的圆角半径，考虑扩展效果
     let effectiveRadius = max(0, theme.hilitedCornerRadius + 2 * extraExpansion / theme.hilitedCornerRadius * max(0, theme.cornerRadius - theme.hilitedCornerRadius))
+    if DEBUG_LAYOUT_LOGS {
+      print("[SquirrelView.drawPathCandidate] outerBox=\(outerBox) effectiveRadius=\(effectiveRadius)")
+    }
 
     // 检查是否使用线性布局模式（支持多行高亮的复杂形状）
   if theme.linear, let highlightedTextRange = convert(range: highlightedRange) {
       // 线性布局：支持复杂的多行高亮形状，如L形、T形等
       let (leadingRect, bodyRect, trailingRect) = multilineRects(forRange: highlightedTextRange, extraSurounding: separatorWidth, bounds: outerBox)
       var (highlightedPoints, highlightedPoints2, rightCorners, rightCorners2) = linearMultilineFor(body: bodyRect, leading: leadingRect, trailing: trailingRect)
+      if DEBUG_LAYOUT_LOGS {
+        print("[SquirrelView.drawPathCandidate] linear leading=\(leadingRect) body=\(bodyRect) trailing=\(trailingRect)")
+      }
 
       // 扩展顶点以达到适当的边界
       highlightedPoints = enlarge(vertex: highlightedPoints, by: extraExpansion)  // 按指定值扩展
@@ -1575,11 +1601,23 @@ private extension SquirrelView {
   } else if let highlightedTextRange = convert(range: highlightedRange) {
       // 简单矩形布局：适用于单行或简单的矩形高亮
   var highlightedRect = self.contentRect(range: highlightedTextRange)  // 获取文本内容矩形
+      if DEBUG_LAYOUT_LOGS { print("[SquirrelView.drawPathCandidate] simple highlightedRect(raw)=\(highlightedRect)") }
       if !nearEmpty(highlightedRect) {
         // 调整高亮矩形的尺寸和位置
         highlightedRect.size.width = backgroundRect.size.width  // 宽度占满背景
         highlightedRect.size.height += theme.linespace          // 增加行间距
         highlightedRect.origin = NSPoint(x: backgroundRect.origin.x, y: highlightedRect.origin.y + theme.edgeInset.height - halfLinespace)
+        // 当存在预编辑区域时，高亮所在的候选区实际位于其下方，需要对应上移基线。
+        if preeditRange.length > 0 {
+          highlightedRect.origin.y += preeditRect.size.height + theme.preeditLinespace / 2 + theme.hilitedCornerRadius / 2 + 1
+        }
+        // 进一步修正：如果这是首个候选项，则将顶部精确对齐到 innerBox.minY，避免顶部空隙与错位
+        if preeditRange.length > 0, let first = candidateRanges.first, first.location == highlightedRange.location {
+          let oldY = highlightedRect.origin.y
+          highlightedRect.origin.y = innerBox.origin.y
+          if DEBUG_LAYOUT_LOGS { print("[SquirrelView.drawPathCandidate] simple first-candidate top-align: y \(oldY) -> \(highlightedRect.origin.y) (innerBox.minY)") }
+        }
+        if DEBUG_LAYOUT_LOGS { print("[SquirrelView.drawPathCandidate] simple highlightedRect(adjusted)=\(highlightedRect)") }
         
         // 如果高亮到了文本末尾，额外增加底部空间
         if highlightedRange.upperBound == (textView.string as NSString).length {
