@@ -202,17 +202,37 @@ final class SquirrelPanel: NSPanel {
       pagingUp = nil  // 清除翻页状态
       
     case .mouseMoved:    // 鼠标在面板内移动
-      let (index, _, _) = view.click(at: mousePosition())
-      // 如果鼠标悬停在新的候选字上，更新高亮显示
-      if let index = index, cursorIndex != index && index >= 0 && index < candidates.count {
+      let pt = mousePosition()
+      let (rawIndex, _, _) = view.click(at: pt)
+      // 悬停滞后（hysteresis）：仅当鼠标越过当前行与目标行的中线+容差，才切换高亮，抑制边界抖动
+      var indexToApply = rawIndex
+  if let next = rawIndex, next != cursorIndex, next >= 0, next < candidates.count, cursorIndex >= 0, cursorIndex < candidates.count, abs(next - cursorIndex) == 1 {
+        if let curRect = view.candidateRowRect(at: cursorIndex), let nextRect = view.candidateRowRect(at: next) {
+          let mid = 0.5 * (curRect.maxY + nextRect.minY)
+          let eps: CGFloat = 0.5
+          if DEBUG_LAYOUT_LOGS {
+            print("[mouseMoved] cursorIndex=\(cursorIndex) -> rawIndex=\(next) y=\(pt.y) curRect=\(curRect) nextRect=\(nextRect) mid=\(mid) eps=\(eps)")
+          }
+          if next > cursorIndex {
+            if pt.y < mid + eps { indexToApply = cursorIndex }
+          } else {
+            if pt.y > mid - eps { indexToApply = cursorIndex }
+          }
+        }
+      }
+      if let index = indexToApply, cursorIndex != index && index >= 0 && index < candidates.count {
+        if DEBUG_LAYOUT_LOGS {
+          print("[mouseMoved] apply highlight=\(index) (from \(cursorIndex))")
+        }
         update(preedit: preedit, selRange: selRange, caretPos: caretPos, candidates: candidates, comments: comments, labels: labels, highlighted: index, page: page, lastPage: lastPage, update: false)
       }
     case .scrollWheel:   // 滚轮或触摸板滚动事件
       // 如果鼠标位于某个可滚动区域且内容溢出，则把事件交给该区域处理并提前返回，避免误触发翻页
       do {
-        let pt = mousePosition()
+  let pt = mousePosition()
+  let ptInSuperview = view.convert(pt, to: self.contentView)
         var forwarded = false
-        if view.preeditScrollView.frame.contains(pt), let dr = view.preeditTextView.textLayoutManager?.documentRange {
+  if view.preeditScrollView.frame.contains(ptInSuperview), let dr = view.preeditTextView.textLayoutManager?.documentRange {
           let docH = view.contentRectPreedit(range: dr).height
           // 以可见文本区域（扣除上下内边距）作为阈值
           let visibleH = max(0, view.preeditScrollView.bounds.height - view.currentTheme.edgeInset.height * 2)
@@ -221,7 +241,7 @@ final class SquirrelPanel: NSPanel {
             forwarded = true
           }
         }
-        if view.candidateScrollView.frame.contains(pt), let dr = view.candidateTextView.textLayoutManager?.documentRange {
+  if view.candidateScrollView.frame.contains(ptInSuperview), let dr = view.candidateTextView.textLayoutManager?.documentRange {
           let docH = view.contentRect(range: dr).height
           let visibleH = max(0, view.candidateScrollView.bounds.height - view.currentTheme.edgeInset.height * 2)
           if docH > visibleH + 0.5 {
@@ -504,7 +524,7 @@ final class SquirrelPanel: NSPanel {
     view.preeditTextView.setLayoutOrientation(vertical ? .vertical : .horizontal)
     view.candidateTextView.setLayoutOrientation(vertical ? .vertical : .horizontal)
     
-    // 🎨 步骤4: 绘制完整的输入法面板视图
+  // 🎨 步骤4: 绘制完整的输入法面板视图
     // 这个函数会绘制候选字高亮效果、翻页按钮、边框等所有视觉元素
     // candidateRanges: 每个候选字在文本中的位置范围
     // hilightedIndex: 当前高亮（选中）的候选字索引
@@ -514,6 +534,15 @@ final class SquirrelPanel: NSPanel {
     view.drawView(candidateRanges: candidateRanges, hilightedIndex: index, preeditRange: preeditRange, highlightedPreeditRange: highlightedPreeditRange, canPageUp: page > 0, canPageDown: !lastPage)
     
     // 🚀 步骤5: 最终显示面板到屏幕上
+    // 若是仅高亮刷新（update=false），禁止任何“自动回顶”副作用，避免悬停导致的跳动
+    var suppressedAutoScroll = false
+    if !update && shouldAutoScrollToTop {
+      suppressedAutoScroll = true
+      if DEBUG_LAYOUT_LOGS {
+        print("[Panel.update] hover-refresh suppress autoScrollToTop (was true)")
+      }
+      shouldAutoScrollToTop = false
+    }
     // 计算面板位置、设置大小、应用主题样式，并将面板显示给用户
     show()
 
@@ -525,9 +554,19 @@ final class SquirrelPanel: NSPanel {
       view.candidateScrollView.reflectScrolledClipView(view.candidateScrollView.contentView)
     }
 
-  // 键盘上下选择时，若高亮候选不在可见区域内，则自动滚动使其进入可见范围（优先贴到底部）。
-  // 该操作放在恢复偏移之后执行，以便覆盖仅高亮刷新时的偏移保留。
-  ensureHighlightedCandidateVisible()
+    // 仅在鼠标不位于候选区域内时，执行“滚动确保可见”。
+    // 避免鼠标悬停导致的高亮刷新触发自动滚动，引起你遇到的“从第二移到第三时页面跳动”。
+    let mousePt = mousePosition()
+    let ptInSuperview = view.convert(mousePt, to: self.contentView)
+    if !view.candidateScrollView.frame.contains(ptInSuperview) {
+      ensureHighlightedCandidateVisible()
+    } else if DEBUG_LAYOUT_LOGS {
+      print("[Panel.update] skip ensureVisible: mouse in candidate, ptInSuperview=\(ptInSuperview)")
+    }
+    if suppressedAutoScroll {
+      // 恢复标记为 false（show 内部已将其归零），这里只是明确记录
+      if DEBUG_LAYOUT_LOGS { print("[Panel.update] suppress done; autoScrollToTop remains false") }
+    }
   }
 
   // 更新状态消息的函数
@@ -600,7 +639,10 @@ private extension SquirrelPanel {
 
     // 若已完全可见则不滚动
     let epsilon: CGFloat = 0.5
-    if docRect.minY >= visible.minY - epsilon && docRect.maxY <= visible.maxY + epsilon { return }
+    if docRect.minY >= visible.minY - epsilon && docRect.maxY <= visible.maxY + epsilon {
+      if DEBUG_LAYOUT_LOGS { print("[ensureVisible] already visible: doc=\(docRect) visible=\(visible)") }
+      return
+    }
 
     // 目标 origin.y：下方不可见 -> 将其底边贴到可见区域底边；上方不可见 -> 将其顶边贴到可见区域顶边
     var targetY = visible.origin.y
@@ -615,7 +657,8 @@ private extension SquirrelPanel {
     // 设置滚动；为避免触发滚动观察回调造成递归，这里加保护标记
     guard Self.isUpdatingFromScroll == false else { return }
     Self.isUpdatingFromScroll = true
-    clipView.scroll(to: NSPoint(x: visible.origin.x, y: targetY))
+  if DEBUG_LAYOUT_LOGS { print("[ensureVisible] scroll to y=\(targetY) (doc=\(docRect) visibleBefore=\(visible))") }
+  clipView.scroll(to: NSPoint(x: visible.origin.x, y: targetY))
     view.candidateScrollView.reflectScrolledClipView(clipView)
     Self.isUpdatingFromScroll = false
   }
@@ -624,14 +667,17 @@ private extension SquirrelPanel {
     guard !Self.isUpdatingFromScroll else { return }
     // 仅当鼠标在候选区域内且内容发生滚动时，才根据鼠标位置更新高亮
     let pt = mousePosition()
-    guard view.candidateScrollView.frame.contains(pt) else {
+    let ptInSuperview = view.convert(pt, to: self.contentView)
+    guard view.candidateScrollView.frame.contains(ptInSuperview) else {
       // 只是触发重绘，让高亮路径跟随滚动偏移
+      if DEBUG_LAYOUT_LOGS { print("[clipViewChanged] mouse outside candidate; redraw only") }
       view.needsDisplay = true
       return
     }
     Self.isUpdatingFromScroll = true
     defer { Self.isUpdatingFromScroll = false }
     let (idx, _, _) = view.click(at: pt)
+    if DEBUG_LAYOUT_LOGS { print("[clipViewChanged] hover update idx=\(String(describing: idx)) cursorIndex=\(cursorIndex))") }
     if let idx, idx >= 0 && idx < candidates.count, cursorIndex != idx {
       // 滚动驱动的高亮切换不应重置滚动位置
       update(preedit: preedit, selRange: selRange, caretPos: caretPos, candidates: candidates, comments: comments, labels: labels, highlighted: idx, page: page, lastPage: lastPage, update: false)

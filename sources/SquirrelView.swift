@@ -121,6 +121,7 @@ final class SquirrelView: NSView {
   var shape = CAShapeLayer()                  // 形状图层，用于绘制面板的形状
   private var downPath: CGPath?               // 向下翻页按钮的路径
   private var upPath: CGPath?                 // 向上翻页按钮的路径
+  // 行矩形缓存（可选，减少重复计算）；简单实现：每次请求现算，避免复杂失效管理
 
   // 主题相关的属性
   var lightTheme = SquirrelTheme()            // 浅色主题配置
@@ -1062,6 +1063,12 @@ final class SquirrelView: NSView {
     var index = 0  // 文本索引位置
     var candidateIndex: Int?  // 被点击的候选字索引
     var preeditIndex: Int?    // 被点击的预编辑文本索引
+  // 注意：SquirrelView 与两个 NSScrollView 是兄弟视图（同属 panel.contentView 的子视图），
+  // 因此在做 frame.contains 判断时，必须将点击点转换到共同的父视图坐标系，避免坐标系不一致造成误判。
+    let pointInSuperview = self.convert(clickPoint, to: self.superview)
+    if DEBUG_LAYOUT_LOGS {
+      print("[View.click] at=\(clickPoint) inSuperview=\(pointInSuperview)")
+    }
     
     // 检查是否点击了"下一页"按钮
     if let downPath = self.downPath, downPath.contains(clickPoint) {
@@ -1076,7 +1083,7 @@ final class SquirrelView: NSView {
     if let path = shape.path, path.contains(clickPoint) {
       let theme = currentTheme
       // 优先判定预编辑区域
-      if preeditScrollView.frame.contains(clickPoint), let tlm = preeditTextView.textLayoutManager {
+      if preeditScrollView.frame.contains(pointInSuperview), let tlm = preeditTextView.textLayoutManager {
         var point = NSPoint(x: clickPoint.x - preeditScrollView.frame.origin.x - preeditTextView.textContainerInset.width,
                             y: clickPoint.y - preeditScrollView.frame.origin.y - preeditTextView.textContainerInset.height)
         point.x += preeditScrollOffset.x
@@ -1095,8 +1102,8 @@ final class SquirrelView: NSView {
             break
           }
         }
-      } else if candidateScrollView.frame.contains(clickPoint), let tlm = candidateTextView.textLayoutManager {
-        // 先进行一次与绘制几何一致的命中测试，避免段前/段后间距把点归属到相邻行导致 off-by-one
+      } else if candidateScrollView.frame.contains(pointInSuperview), let tlm = candidateTextView.textLayoutManager {
+        // 先进行一次与绘制几何一致的命中测试：构造“非重叠条带”，消除相邻多行候选之间的上下重叠
         let halfLinespace = currentTheme.linespace / 2
         // 与绘制时一致：用 preedit clipView 的底边作为 seam，并进行设备像素对齐
         let clip = preeditScrollView.contentView
@@ -1107,26 +1114,46 @@ final class SquirrelView: NSView {
         let svW = candidateScrollView.frame.width
         // 仅当点在候选滚动区域的水平范围内时才测试
         if clickPoint.x >= svX && clickPoint.x <= svX + svW {
+          var rowRects: [NSRect] = []
+          rowRects.reserveCapacity(candidateRanges.count)
           for i in 0..<candidateRanges.count {
             if let tr = convert(range: candidateRanges[i]) {
-              var r = contentRect(range: tr) // 已在 self 坐标系，含 frame.origin.y 与 scrollOffset 修正
-              // 将矩形扩展为与高亮绘制一致的高度与顶部偏移：+linespace 高度，-halfLinespace 顶部
+              var r = contentRect(range: tr) // 自身坐标
               r.size.height += currentTheme.linespace
               r.origin.y = r.origin.y + seamTop - halfLinespace
-              // 宽度用候选滚动区域，确保命中判定覆盖整行
               r.origin.x = svX
               r.size.width = svW
-              if r.contains(clickPoint) {
-                candidateIndex = i
-                break
-              }
+              rowRects.append(r)
+            } else {
+              rowRects.append(.zero)
             }
           }
+          // 构造“非重叠条带”：用相邻矩形的中点作为边界
+          let eps: CGFloat = 0.25
+          for i in 0..<rowRects.count {
+            var top = rowRects[i].minY
+            var bottom = rowRects[i].maxY
+            if i > 0 {
+              top = 0.5 * (rowRects[i-1].maxY + rowRects[i].minY)
+            }
+            if i < rowRects.count - 1 {
+              bottom = 0.5 * (rowRects[i].maxY + rowRects[i+1].minY)
+            }
+            var stripe = rowRects[i]
+            stripe.origin.y = top - eps
+            stripe.size.height = (bottom - top) + 2 * eps
+            if DEBUG_LAYOUT_LOGS {
+              print("[View.click] row[\(i)] rect=\(rowRects[i]) stripe=\(stripe)")
+            }
+            if stripe.contains(clickPoint) { candidateIndex = i; break }
+          }
         }
-        // 若几何命中未命中，则回退到文本系统的精确映射
+        // 若几何命中未命中，则回退到文本系统的精确映射（处理极端边界）
         if candidateIndex == nil {
-          var point = NSPoint(x: clickPoint.x - candidateScrollView.frame.origin.x - candidateTextView.textContainerInset.width,
-                              y: clickPoint.y - candidateScrollView.frame.origin.y - candidateTextView.textContainerInset.height)
+          var point = NSPoint(
+            x: clickPoint.x - candidateScrollView.frame.origin.x - candidateTextView.textContainerInset.width,
+            y: clickPoint.y - candidateScrollView.frame.origin.y - candidateTextView.textContainerInset.height
+          )
           point.x += candidateScrollOffset.x
           point.y += candidateScrollOffset.y
           if let fragment = tlm.textLayoutFragment(for: point) {
@@ -1152,6 +1179,28 @@ final class SquirrelView: NSView {
     }
     // 返回点击结果：(候选字索引, 预编辑文本索引, 翻页方向)
     return (candidateIndex, preeditIndex, nil)
+  }
+
+  // 提供给 Panel 的辅助：计算第 index 个候选在“几何命中”时使用的行矩形（与绘制一致，已对齐 seam）。
+  // 返回坐标处于 SquirrelView 自身坐标系。
+  func candidateRowRect(at i: Int) -> NSRect? {
+    guard i >= 0 && i < candidateRanges.count, let tr = convert(range: candidateRanges[i]) else { return nil }
+    let theme = currentTheme
+    let halfLinespace = theme.linespace / 2
+    // 与绘制时一致：用 preedit clipView 的底边作为 seam，并进行设备像素对齐
+    let clip = preeditScrollView.contentView
+    let clipRectInSelf = clip.convert(clip.bounds, to: self)
+    let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+    let seamTop = (clipRectInSelf.maxY * scale).rounded() / scale
+    let svX = candidateScrollView.frame.origin.x
+    let svW = candidateScrollView.frame.width
+    var r = contentRect(range: tr)
+    r.size.height += theme.linespace
+    r.origin.y = r.origin.y + seamTop - halfLinespace
+    r.origin.x = svX
+    r.size.width = svW
+  if DEBUG_LAYOUT_LOGS { print("[View.rowRect] i=\(i) rect=\(r)") }
+  return r
   }
 }
 
