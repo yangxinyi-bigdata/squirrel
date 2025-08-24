@@ -49,49 +49,49 @@
 //
 // ========================================================================
 
-// ========== 🔧 调试配置 ==========
-private let DEBUG_KEEP_PANEL_VISIBLE = true  // 调试时保持面板可见，不会因为鼠标移开而隐藏
-private let DEBUG_LAYOUT_LOGS = true         // 打开详细布局/几何日志
-
 // 导入 AppKit，这是 macOS 应用界面开发的核心库
 // 就像导入一个画画工具箱，里面有各种绘制界面的工具
 import AppKit
 
-// 定义鼠须管面板类，这是输入法候选字窗口的核心
+// ========== 🔧 调试配置 ==========
+private let DEBUG_KEEP_PANEL_VISIBLE = true  // 调试时保持面板可见，不会因为鼠标移开而隐藏
+private let DEBUG_LAYOUT_LOGS = true  // 打开详细布局/几何日志
+
+// 义鼠须管面板类，这是输入法候选字窗口的核心
 // final 表示这个类不能被继承，NSPanel 是 macOS 面板窗口的基类
 // 就像创建一个特殊的小窗口，专门用来显示候选字
 final class SquirrelPanel: NSPanel {
   // 类的属性定义，就像这个面板的各种特征和工具
-  private let view: SquirrelView            // 主要的显示视图，负责绘制候选字
-  private let back: NSVisualEffectView      // 背景效果视图，提供毛玻璃等视觉效果
+  private let view: SquirrelView  // 主要的显示视图，负责绘制候选字
+  private let back: NSVisualEffectView  // 背景效果视图，提供毛玻璃等视觉效果
   var inputController: SquirrelInputController?  // 输入控制器，用来处理用户的输入操作
 
-  var position: NSRect                      // 面板的位置信息，记录在屏幕上的坐标
-  private var screenRect: NSRect = .zero    // 当前屏幕的尺寸和位置
-  private var maxHeight: CGFloat = 0        // 面板的最大高度
+  var position: NSRect  // 面板的位置信息，记录在屏幕上的坐标
+  private var screenRect: NSRect = .zero  // 当前屏幕的尺寸和位置
+  private var maxHeight: CGFloat = 0  // 面板的最大高度
 
   // 状态消息相关的属性
-  private var statusMessage: String = ""    // 存储要显示的状态消息文本
-  private var statusTimer: Timer?           // 定时器，用来控制状态消息的显示时间
+  private var statusMessage: String = ""  // 存储要显示的状态消息文本
+  private var statusTimer: Timer?  // 定时器，用来控制状态消息的显示时间
 
   // 输入相关的状态变量，记录当前输入法的各种状态
-  private var preedit: String = ""          // 预编辑文本（还未确认的输入内容）
-  private var selRange: NSRange = .empty    // 选中的文本范围
-  private var caretPos: Int = 0             // 光标位置（插入点位置）
-  private var candidates: [String] = .init() // 候选字列表
-  private var comments: [String] = .init()   // 候选字的注释（如拼音、解释等）
-  private var labels: [String] = .init()     // 候选字的标签（如 1. 2. 3. 等）
-  private var index: Int = 0                 // 当前选中的候选字索引
-  private var cursorIndex: Int = 0           // 鼠标悬停的候选字索引
-  
+  private var preedit: String = ""  // 预编辑文本（还未确认的输入内容）
+  private var selRange: NSRange = .empty  // 选中的文本范围
+  private var caretPos: Int = 0  // 光标位置（插入点位置）
+  private var candidates: [String] = .init()  // 候选字列表
+  private var comments: [String] = .init()  // 候选字的注释（如拼音、解释等）
+  private var labels: [String] = .init()  // 候选字的标签（如 1. 2. 3. 等）
+  private var index: Int = 0  // 当前选中的候选字索引
+  private var cursorIndex: Int = 0  // 鼠标悬停的候选字索引
+
   // 滚动相关的变量，处理鼠标滚轮和触摸板手势
-  private var scrollDirection: CGVector = .zero    // 滚动方向和距离
-  private var scrollTime: Date = .distantPast      // 最后一次滚动的时间
-  
+  private var scrollDirection: CGVector = .zero  // 滚动方向和距离
+  private var scrollTime: Date = .distantPast  // 最后一次滚动的时间
+
   // 分页相关的变量，处理候选字的翻页
-  private var page: Int = 0                 // 当前页码
-  private var lastPage: Bool = true         // 是否是最后一页
-  private var pagingUp: Bool?               // 是否正在向上翻页
+  private var page: Int = 0  // 当前页码
+  private var lastPage: Bool = true  // 是否是最后一页
+  private var pagingUp: Bool?  // 是否正在向上翻页
   // 仅当内容发生变化（比如输入或翻页）时，下一次 show() 才会把滚动位置重置到顶部。
   // 防止在滚动或鼠标悬停高亮变化时把用户滚动位置强行跳回顶部。
   private var shouldAutoScrollToTop: Bool = true
@@ -99,54 +99,59 @@ final class SquirrelPanel: NSPanel {
   // 初始化函数，创建一个新的鼠须管面板
   // position 参数指定面板在屏幕上的初始位置
   init(position: NSRect) {
-    self.position = position                          // 保存位置信息
-    self.view = SquirrelView(frame: position)        // 创建主显示视图
-    self.back = NSVisualEffectView()                 // 创建背景效果视图
-    
+    self.position = position  // 保存位置信息
+    self.view = SquirrelView(frame: position)  // 创建主显示视图
+    self.back = NSVisualEffectView()  // 创建背景效果视图
+
     // 调用父类的初始化方法，设置面板的基本属性
-    super.init(contentRect: position, styleMask: .nonactivatingPanel, backing: .buffered, defer: true)
-    
+    super.init(
+      contentRect: position, styleMask: .nonactivatingPanel, backing: .buffered, defer: true)
+
     // 设置面板的显示层级，让它显示在最顶层
     self.level = .init(Int(CGShieldingWindowLevel()))
-    self.hasShadow = true        // 启用阴影效果
-    self.isOpaque = false        // 设置为非不透明（允许透明效果）
-    self.backgroundColor = .clear // 设置背景颜色为透明
-    
-    // 配置背景效果视图的属性
-    back.blendingMode = .behindWindow    // 设置混合模式
-    back.material = .hudWindow           // 设置材质为 HUD 窗口样式
-    back.state = .active                 // 设置为活跃状态
-    back.wantsLayer = true               // 启用图层
-    back.layer?.mask = view.shape        // 使用主视图的形状作为遮罩
-    
-    // 创建内容视图并添加子视图
-  let contentView = NSView()
-  contentView.addSubview(back)         // 添加背景视图
-  contentView.addSubview(view)         // 添加主视图（负责绘制形状、底色等）
-  // 两个独立滚动区域：预编辑区 + 候选区
-  contentView.addSubview(view.preeditScrollView)
-  contentView.addSubview(view.candidateScrollView)
-    self.contentView = contentView       // 设置为面板的内容视图
+    self.hasShadow = true  // 启用阴影效果
+    self.isOpaque = false  // 设置为非不透明（允许透明效果）
+    self.backgroundColor = .clear  // 设置背景颜色为透明
 
-  // 监听候选与预编辑区域的滚动（ClipView 边界变化），用于在滚动时让“悬停高亮”实时跟随
-  NotificationCenter.default.addObserver(self, selector: #selector(handleClipViewBoundsChanged(_:)), name: NSView.boundsDidChangeNotification, object: view.candidateScrollView.contentView)
-  NotificationCenter.default.addObserver(self, selector: #selector(handleClipViewBoundsChanged(_:)), name: NSView.boundsDidChangeNotification, object: view.preeditScrollView.contentView)
+    // 配置背景效果视图的属性
+    back.blendingMode = .behindWindow  // 设置混合模式
+    back.material = .hudWindow  // 设置材质为 HUD 窗口样式
+    back.state = .active  // 设置为活跃状态
+    back.wantsLayer = true  // 启用图层
+    back.layer?.mask = view.shape  // 使用主视图的形状作为遮罩
+
+    // 创建内容视图并添加子视图
+    let contentView = NSView()
+    contentView.addSubview(back)  // 添加背景视图
+    contentView.addSubview(view)  // 添加主视图（负责绘制形状、底色等）
+    // 两个独立滚动区域：预编辑区 + 候选区
+    contentView.addSubview(view.preeditScrollView)
+    contentView.addSubview(view.candidateScrollView)
+    self.contentView = contentView  // 设置为面板的内容视图
+
+    // 监听候选与预编辑区域的滚动（ClipView 边界变化），用于在滚动时让“悬停高亮”实时跟随
+    NotificationCenter.default.addObserver(
+      self, selector: #selector(handleClipViewBoundsChanged(_:)),
+      name: NSView.boundsDidChangeNotification, object: view.candidateScrollView.contentView)
+    NotificationCenter.default.addObserver(
+      self, selector: #selector(handleClipViewBoundsChanged(_:)),
+      name: NSView.boundsDidChangeNotification, object: view.preeditScrollView.contentView)
   }
 
   // 以下是一些计算属性，用来快速获取当前主题的设置
   // 这些属性就像主题配置的快捷方式
-  
+
   var linear: Bool {
-    view.currentTheme.linear              // 是否使用线性布局（水平排列候选字）
+    view.currentTheme.linear  // 是否使用线性布局（水平排列候选字）
   }
   var vertical: Bool {
-    view.currentTheme.vertical            // 是否使用垂直显示模式
+    view.currentTheme.vertical  // 是否使用垂直显示模式
   }
   var inlinePreedit: Bool {
-    view.currentTheme.inlinePreedit       // 是否在输入位置内联显示预编辑文本
+    view.currentTheme.inlinePreedit  // 是否在输入位置内联显示预编辑文本
   }
   var inlineCandidate: Bool {
-    view.currentTheme.inlineCandidate     // 是否在输入位置内联显示候选字
+    view.currentTheme.inlineCandidate  // 是否在输入位置内联显示候选字
   }
 
   // 重写事件处理方法，处理各种用户交互
@@ -156,7 +161,7 @@ final class SquirrelPanel: NSPanel {
     switch event.type {
     case .leftMouseDown:  // 鼠标左键按下
       // 获取点击位置对应的候选字索引和翻页信息
-      let (index, _, pagingUp) =  view.click(at: mousePosition())
+      let (index, _, pagingUp) = view.click(at: mousePosition())
       if let pagingUp {
         self.pagingUp = pagingUp  // 记录翻页方向
       } else {
@@ -176,42 +181,51 @@ final class SquirrelPanel: NSPanel {
       } else {
         self.pagingUp = nil
       }
-      
+
       // 如果点击了预编辑文本区域，移动光标
       if let preeditIndex, preeditIndex >= 0 && preeditIndex < preedit.utf16.count {
         if preeditIndex < caretPos {
-          _ = inputController?.moveCaret(forward: true)   // 向前移动光标
+          _ = inputController?.moveCaret(forward: true)  // 向前移动光标
         } else if preeditIndex > caretPos {
           _ = inputController?.moveCaret(forward: false)  // 向后移动光标
         }
       }
-      
+
       // 如果点击了候选字，并且与按下时是同一个候选字，则选择它
       if let index, index == self.index && index >= 0 && index < candidates.count {
         _ = inputController?.selectCandidate(index)
       }
     case .mouseEntered:  // 鼠标进入面板区域
-      acceptsMouseMovedEvents = true   // 开始接收鼠标移动事件
-      
-    case .mouseExited:   // 鼠标离开面板区域
+      acceptsMouseMovedEvents = true  // 开始接收鼠标移动事件
+
+    case .mouseExited:  // 鼠标离开面板区域
       acceptsMouseMovedEvents = false  // 停止接收鼠标移动事件
       // 如果鼠标悬停的候选字与当前选中的不同，恢复高亮显示
       if cursorIndex != index {
-        update(preedit: preedit, selRange: selRange, caretPos: caretPos, candidates: candidates, comments: comments, labels: labels, highlighted: index, page: page, lastPage: lastPage, update: false)
+        update(
+          preedit: preedit, selRange: selRange, caretPos: caretPos, candidates: candidates,
+          comments: comments, labels: labels, highlighted: index, page: page, lastPage: lastPage,
+          update: false)
       }
       pagingUp = nil  // 清除翻页状态
-      
-    case .mouseMoved:    // 鼠标在面板内移动
+
+    case .mouseMoved:  // 鼠标在面板内移动
       let pt = mousePosition()
       let (rawIndex, _, _) = view.click(at: pt)
       // 悬停滞后（hysteresis）：仅当鼠标越过当前行与目标行的中线+容差，才切换高亮，抑制边界抖动
       var indexToApply = rawIndex
-  if let next = rawIndex, next != cursorIndex, next >= 0, next < candidates.count, cursorIndex >= 0, cursorIndex < candidates.count, abs(next - cursorIndex) == 1 {
-        if let curRect = view.candidateRowRect(at: cursorIndex), let nextRect = view.candidateRowRect(at: next) {
+      if let next = rawIndex, next != cursorIndex, next >= 0, next < candidates.count,
+        cursorIndex >= 0, cursorIndex < candidates.count, abs(next - cursorIndex) == 1
+      {
+        if let curRect = view.candidateRowRect(at: cursorIndex),
+          let nextRect = view.candidateRowRect(at: next)
+        {
           let mid = 0.5 * (curRect.maxY + nextRect.minY)
           let eps: CGFloat = 0.5
           if DEBUG_LAYOUT_LOGS {
-            print("[mouseMoved] cursorIndex=\(cursorIndex) -> rawIndex=\(next) y=\(pt.y) curRect=\(curRect) nextRect=\(nextRect) mid=\(mid) eps=\(eps)")
+            print(
+              "[mouseMoved] cursorIndex=\(cursorIndex) -> rawIndex=\(next) y=\(pt.y) curRect=\(curRect) nextRect=\(nextRect) mid=\(mid) eps=\(eps)"
+            )
           }
           if next > cursorIndex {
             if pt.y < mid + eps { indexToApply = cursorIndex }
@@ -224,26 +238,35 @@ final class SquirrelPanel: NSPanel {
         if DEBUG_LAYOUT_LOGS {
           print("[mouseMoved] apply highlight=\(index) (from \(cursorIndex))")
         }
-        update(preedit: preedit, selRange: selRange, caretPos: caretPos, candidates: candidates, comments: comments, labels: labels, highlighted: index, page: page, lastPage: lastPage, update: false)
+        update(
+          preedit: preedit, selRange: selRange, caretPos: caretPos, candidates: candidates,
+          comments: comments, labels: labels, highlighted: index, page: page, lastPage: lastPage,
+          update: false)
       }
-    case .scrollWheel:   // 滚轮或触摸板滚动事件
+    case .scrollWheel:  // 滚轮或触摸板滚动事件
       // 如果鼠标位于某个可滚动区域且内容溢出，则把事件交给该区域处理并提前返回，避免误触发翻页
       do {
-  let pt = mousePosition()
-  let ptInSuperview = view.convert(pt, to: self.contentView)
+        let pt = mousePosition()
+        let ptInSuperview = view.convert(pt, to: self.contentView)
         var forwarded = false
-  if view.preeditScrollView.frame.contains(ptInSuperview), let dr = view.preeditTextView.textLayoutManager?.documentRange {
+        if view.preeditScrollView.frame.contains(ptInSuperview),
+          let dr = view.preeditTextView.textLayoutManager?.documentRange
+        {
           let docH = view.contentRectPreedit(range: dr).height
           // 以可见文本区域（扣除上下内边距）作为阈值
-          let visibleH = max(0, view.preeditScrollView.bounds.height - view.currentTheme.edgeInset.height * 2)
+          let visibleH = max(
+            0, view.preeditScrollView.bounds.height - view.currentTheme.edgeInset.height * 2)
           if docH > visibleH + 0.5 {
             super.sendEvent(event)
             forwarded = true
           }
         }
-  if view.candidateScrollView.frame.contains(ptInSuperview), let dr = view.candidateTextView.textLayoutManager?.documentRange {
+        if view.candidateScrollView.frame.contains(ptInSuperview),
+          let dr = view.candidateTextView.textLayoutManager?.documentRange
+        {
           let docH = view.contentRect(range: dr).height
-          let visibleH = max(0, view.candidateScrollView.bounds.height - view.currentTheme.edgeInset.height * 2)
+          let visibleH = max(
+            0, view.candidateScrollView.bounds.height - view.currentTheme.edgeInset.height * 2)
           if docH > visibleH + 0.5 {
             super.sendEvent(event)
             forwarded = true
@@ -253,7 +276,10 @@ final class SquirrelPanel: NSPanel {
           // 滚动后根据当前鼠标位置更新“悬停高亮”索引，让高亮与候选一起滚动
           let (idx, _, _) = view.click(at: mousePosition())
           if let idx, idx >= 0 && idx < candidates.count, cursorIndex != idx {
-            update(preedit: preedit, selRange: selRange, caretPos: caretPos, candidates: candidates, comments: comments, labels: labels, highlighted: idx, page: page, lastPage: lastPage, update: false)
+            update(
+              preedit: preedit, selRange: selRange, caretPos: caretPos, candidates: candidates,
+              comments: comments, labels: labels, highlighted: idx, page: page, lastPage: lastPage,
+              update: false)
           } else {
             // 仅触发重绘，保证高亮路径按新的滚动偏移重算
             view.needsDisplay = true
@@ -264,13 +290,16 @@ final class SquirrelPanel: NSPanel {
       if event.phase == .began {  // 滚动开始
         scrollDirection = .zero
         // Scrollboard span - 触摸板滚动跨度
-      } else if event.phase == .ended || (event.phase == .init(rawValue: 0) && event.momentumPhase != .init(rawValue: 0)) {
+      } else if event.phase == .ended
+        || (event.phase == .init(rawValue: 0) && event.momentumPhase != .init(rawValue: 0))
+      {
         // 滚动结束或惯性滚动
         // 根据滚动方向和距离决定是否翻页
         if abs(scrollDirection.dx) > abs(scrollDirection.dy) && abs(scrollDirection.dx) > 10 {
           // 水平滚动距离较大，根据垂直模式调整翻页方向
           _ = inputController?.page(up: (scrollDirection.dx < 0) == vertical)
-        } else if abs(scrollDirection.dx) < abs(scrollDirection.dy) && abs(scrollDirection.dy) > 10 {
+        } else if abs(scrollDirection.dx) < abs(scrollDirection.dy) && abs(scrollDirection.dy) > 10
+        {
           // 垂直滚动距离较大
           _ = inputController?.page(up: scrollDirection.dy > 0)
         }
@@ -282,14 +311,16 @@ final class SquirrelPanel: NSPanel {
           scrollDirection = .zero  // 重置滚动方向
         }
         scrollTime = .now  // 更新滚动时间
-        
+
         // 累积同方向的滚动距离
-        if (scrollDirection.dy >= 0 && event.scrollingDeltaY > 0) || (scrollDirection.dy <= 0 && event.scrollingDeltaY < 0) {
+        if (scrollDirection.dy >= 0 && event.scrollingDeltaY > 0)
+          || (scrollDirection.dy <= 0 && event.scrollingDeltaY < 0)
+        {
           scrollDirection.dy += event.scrollingDeltaY
         } else {
           scrollDirection = .zero  // 方向改变时重置
         }
-        
+
         // 如果滚动距离足够大，执行翻页
         if abs(scrollDirection.dy) > 10 {
           _ = inputController?.page(up: scrollDirection.dy > 0)
@@ -307,32 +338,37 @@ final class SquirrelPanel: NSPanel {
   }
 
   // 隐藏面板的方法
-  func hide() {    
+  func hide() {
     statusTimer?.invalidate()  // 取消状态消息定时器
     statusTimer = nil
-    orderOut(nil)             // 将面板从屏幕上移除
-    maxHeight = 0             // 重置最大高度
+    orderOut(nil)  // 将面板从屏幕上移除
+    maxHeight = 0  // 重置最大高度
   }
 
   // 主要的更新函数，用来添加文本属性并显示来自 librime 的输出nijhn=
   // 这是整个面板最核心的函数，就像画家的调色板，把各种元素组合成最终的显示效果
   // swiftlint:disable:next cyclomatic_complexity function_parameter_count
-  func update(preedit: String, selRange: NSRange, caretPos: Int, candidates: [String], comments: [String], labels: [String], highlighted index: Int, page: Int, lastPage: Bool, update: Bool) {
+  func update(
+    preedit: String, selRange: NSRange, caretPos: Int, candidates: [String], comments: [String],
+    labels: [String], highlighted index: Int, page: Int, lastPage: Bool, update: Bool
+  ) {
     if DEBUG_LAYOUT_LOGS {
-      print("[Panel.update] >>> 输入参数预览 preedit='\(preedit)' selRange=\(selRange) caretPos=\(caretPos) candidates=\(candidates.count) highlighted=\(index) page=\(page) lastPage=\(lastPage)")
+      print(
+        "[Panel.update] >>> 输入参数预览 preedit='\(preedit)' selRange=\(selRange) caretPos=\(caretPos) candidates=\(candidates.count) highlighted=\(index) page=\(page) lastPage=\(lastPage)"
+      )
     }
-    
+
     // 如果需要更新数据，就保存新的状态信息
     if update {
-      self.preedit = preedit        // 预编辑文本
-      self.selRange = selRange      // 选中范围
-      self.caretPos = caretPos      // 光标位置
+      self.preedit = preedit  // 预编辑文本
+      self.selRange = selRange  // 选中范围
+      self.caretPos = caretPos  // 光标位置
       self.candidates = candidates  // 候选字列表
-      self.comments = comments      // 注释列表
-      self.labels = labels          // 标签列表
-      self.index = index           // 选中索引
-      self.page = page             // 页码
-      self.lastPage = lastPage     // 是否最后一页
+      self.comments = comments  // 注释列表
+      self.labels = labels  // 标签列表
+      self.index = index  // 选中索引
+      self.page = page  // 页码
+      self.lastPage = lastPage  // 是否最后一页
       // 数据真正更新时，下一次展示回到列表顶部
       shouldAutoScrollToTop = true
     }
@@ -340,32 +376,32 @@ final class SquirrelPanel: NSPanel {
 
     // 如果有候选字或预编辑文本，清除状态消息
     if !candidates.isEmpty || !preedit.isEmpty {
-      statusMessage = ""           // 清空状态消息
-      statusTimer?.invalidate()    // 取消状态消息定时器
+      statusMessage = ""  // 清空状态消息
+      statusTimer?.invalidate()  // 取消状态消息定时器
       statusTimer = nil
     } else {
       // 如果没有候选字和预编辑文本，处理状态消息显示
       if !statusMessage.isEmpty {
         show(status: statusMessage)  // 显示状态消息
-        statusMessage = ""           // 清空状态消息
+        statusMessage = ""  // 清空状态消息
       } else if statusTimer == nil {
-        hide()                      // 如果没有定时器运行，隐藏面板
+        hide()  // 如果没有定时器运行，隐藏面板
       }
       return  // 提前返回，不继续处理候选字显示
     }
 
-  let theme = view.currentTheme  // 获取当前主题
-  // 在仅变更高亮（update=false）或滚动驱动的刷新时，保存滚动位置，避免重设文本后被系统复位到顶部
-  let preserveOffsets = !update
-  let preeditOffsetBefore = view.preeditScrollView.contentView.bounds.origin
-  let candidateOffsetBefore = view.candidateScrollView.contentView.bounds.origin
-    currentScreen()               // 更新当前屏幕信息
+    let theme = view.currentTheme  // 获取当前主题
+    // 在仅变更高亮（update=false）或滚动驱动的刷新时，保存滚动位置，避免重设文本后被系统复位到顶部
+    let preserveOffsets = !update
+    let preeditOffsetBefore = view.preeditScrollView.contentView.bounds.origin
+    let candidateOffsetBefore = view.candidateScrollView.contentView.bounds.origin
+    currentScreen()  // 更新当前屏幕信息
 
     // 创建富文本对象，用来存储所有要显示的文本和样式
-  let preeditText = NSMutableAttributedString()
-  let candidateText = NSMutableAttributedString()
-  let preeditRange: NSRange           // 预编辑文本的范围（在 preeditText 内）
-  let highlightedPreeditRange: NSRange // 预编辑文本中高亮部分的范围
+    let preeditText = NSMutableAttributedString()
+    let candidateText = NSMutableAttributedString()
+    let preeditRange: NSRange  // 预编辑文本的范围（在 preeditText 内）
+    let highlightedPreeditRange: NSRange  // 预编辑文本中高亮部分的范围
 
     // 处理预编辑文本（用户正在输入但还未确认的文本）
     if !preedit.isEmpty {
@@ -373,13 +409,15 @@ final class SquirrelPanel: NSPanel {
       preeditRange = NSRange(location: 0, length: preedit.utf16.count)
       highlightedPreeditRange = selRange  // 高亮部分就是选中范围
 
-  // 创建预编辑文本的富文本
-  let line = NSMutableAttributedString(string: preedit)
-  line.addAttributes(theme.preeditAttrs, range: preeditRange)
-  line.addAttributes(theme.preeditHighlightedAttrs, range: selRange)
-  preeditText.append(line)
-  // 设置预编辑文本的段落样式
-  preeditText.addAttribute(.paragraphStyle, value: theme.preeditParagraphStyle, range: NSRange(location: 0, length: preeditText.length))
+      // 创建预编辑文本的富文本
+      let line = NSMutableAttributedString(string: preedit)
+      line.addAttributes(theme.preeditAttrs, range: preeditRange)
+      line.addAttributes(theme.preeditHighlightedAttrs, range: selRange)
+      preeditText.append(line)
+      // 设置预编辑文本的段落样式
+      preeditText.addAttribute(
+        .paragraphStyle, value: theme.preeditParagraphStyle,
+        range: NSRange(location: 0, length: preeditText.length))
     } else {
       // 如果没有预编辑文本，设置范围为空
       preeditRange = .empty
@@ -388,122 +426,142 @@ final class SquirrelPanel: NSPanel {
 
     // 处理候选字列表
     var candidateRanges = [NSRange]()  // 存储每个候选字在文本中的范围
-    
+
     // 遍历每个候选字
-  for i in 0..<candidates.count {
+    for i in 0..<candidates.count {
       // 根据是否是当前选中的候选字，选择不同的样式
       let attrs = i == index ? theme.highlightedAttrs : theme.attrs  // 候选字样式
       let labelAttrs = i == index ? theme.labelHighlightedAttrs : theme.labelAttrs  // 标签样式
       let commentAttrs = i == index ? theme.commentHighlightedAttrs : theme.commentAttrs  // 注释样式
 
       // 生成候选字标签（如 1. 2. 3. 或 A. B. C.）
-      let label = if theme.candidateFormat.contains(/\[label\]/) {
-        if labels.count > 1 && i < labels.count {
-          labels[i]  // 使用自定义标签
-        } else if labels.count == 1 && i < labels.first!.count {
-          // 自定义格式：A. B. C...
-          String(labels.first![labels.first!.index(labels.first!.startIndex, offsetBy: i)])
+      let label =
+        if theme.candidateFormat.contains(/\[label\]/) {
+          if labels.count > 1 && i < labels.count {
+            labels[i]  // 使用自定义标签
+          } else if labels.count == 1 && i < labels.first!.count {
+            // 自定义格式：A. B. C...
+            String(labels.first![labels.first!.index(labels.first!.startIndex, offsetBy: i)])
+          } else {
+            // 默认格式：1. 2. 3...
+            "\(i+1)"
+          }
         } else {
-          // 默认格式：1. 2. 3...
-          "\(i+1)"
+          ""  // 不显示标签
         }
-      } else {
-        ""  // 不显示标签
-      }
 
       // 获取候选字和注释文本，并进行标准化处理
       let candidate = candidates[i].precomposedStringWithCanonicalMapping  // 候选字文本
-      let comment = comments[i].precomposedStringWithCanonicalMapping      // 注释文本
+      let comment = comments[i].precomposedStringWithCanonicalMapping  // 注释文本
 
       // 根据候选字格式模板创建富文本行
       let line = NSMutableAttributedString(string: theme.candidateFormat, attributes: labelAttrs)
-      
+
       // 为 [candidate] 占位符区域添加候选字样式
       for range in line.string.ranges(of: /\[candidate\]/) {
         let convertedRange = convert(range: range, in: line.string)
         line.addAttributes(attrs, range: convertedRange)
         // 如果候选字很短，防止换行
         if candidate.count <= 5 {
-          line.addAttribute(.noBreak, value: true, range: NSRange(location: convertedRange.location+1, length: convertedRange.length-1))
+          line.addAttribute(
+            .noBreak, value: true,
+            range: NSRange(location: convertedRange.location + 1, length: convertedRange.length - 1)
+          )
         }
       }
-      
+
       // 为 [comment] 占位符区域添加注释样式
       for range in line.string.ranges(of: /\[comment\]/) {
         line.addAttributes(commentAttrs, range: convert(range: range, in: line.string))
       }
       // 替换占位符为实际内容
-      line.mutableString.replaceOccurrences(of: "[label]", with: label, range: NSRange(location: 0, length: line.length))
+      line.mutableString.replaceOccurrences(
+        of: "[label]", with: label, range: NSRange(location: 0, length: line.length))
       let labeledLine = line.copy() as! NSAttributedString  // 保存带标签的行，用于后续计算
-      line.mutableString.replaceOccurrences(of: "[candidate]", with: candidate, range: NSRange(location: 0, length: line.length))
-      line.mutableString.replaceOccurrences(of: "[comment]", with: comment, range: NSRange(location: 0, length: line.length))
+      line.mutableString.replaceOccurrences(
+        of: "[candidate]", with: candidate, range: NSRange(location: 0, length: line.length))
+      line.mutableString.replaceOccurrences(
+        of: "[comment]", with: comment, range: NSRange(location: 0, length: line.length))
 
       // 如果行很短，防止换行
       if line.length <= 10 {
-        line.addAttribute(.noBreak, value: true, range: NSRange(location: 1, length: line.length-1))
+        line.addAttribute(
+          .noBreak, value: true, range: NSRange(location: 1, length: line.length - 1))
       }
 
       // 创建行分隔符（线性布局用空格，非线性用换行符）
-  let lineSeparator = NSAttributedString(string: linear ? "  " : "\n", attributes: attrs)
-  if i > 0 { candidateText.append(lineSeparator) }
+      let lineSeparator = NSAttributedString(string: linear ? "  " : "\n", attributes: attrs)
+      if i > 0 { candidateText.append(lineSeparator) }
       // 处理垂直模式的分隔符
       let str = lineSeparator.mutableCopy() as! NSMutableAttributedString
       if vertical {
-        str.addAttribute(.verticalGlyphForm, value: 1, range: NSRange(location: 0, length: str.length))
+        str.addAttribute(
+          .verticalGlyphForm, value: 1, range: NSRange(location: 0, length: str.length))
       }
-  view.separatorWidth = str.boundingRect(with: .zero).width  // 计算分隔符宽度
+      view.separatorWidth = str.boundingRect(with: .zero).width  // 计算分隔符宽度
 
-  // 设置段落样式
-  // 说明：候选区与预编辑区已分离显示，第一项不应再使用包含“段前间距(来自预编辑)”的 firstParagraphStyle。
-  // 若继续使用，会导致候选区顶部出现多余留白，从而使首项与高亮背景发生错位。
-  // 因此统一使用普通的 paragraphStyle。
-  let paragraphStyleCandidate = theme.paragraphStyle.mutableCopy() as! NSMutableParagraphStyle
-      
+      // 设置段落样式
+      // 说明：候选区与预编辑区已分离显示，第一项不应再使用包含“段前间距(来自预编辑)”的 firstParagraphStyle。
+      // 若继续使用，会导致候选区顶部出现多余留白，从而使首项与高亮背景发生错位。
+      // 因此统一使用普通的 paragraphStyle。
+      let paragraphStyleCandidate = theme.paragraphStyle.mutableCopy() as! NSMutableParagraphStyle
+
       // 线性布局的特殊处理
       if linear {
         paragraphStyleCandidate.paragraphSpacingBefore -= theme.linespace
         paragraphStyleCandidate.lineSpacing = theme.linespace
       }
-      
+
       // 非线性布局且有标签时，设置标签缩进
-      if !linear, let labelEnd = labeledLine.string.firstMatch(of: /\[(candidate|comment)\]/)?.range.lowerBound {
-        let labelString = labeledLine.attributedSubstring(from: NSRange(location: 0, length: labelEnd.utf16Offset(in: labeledLine.string)))
-        let labelWidth = labelString.boundingRect(with: .zero, options: [.usesLineFragmentOrigin]).width
+      if !linear,
+        let labelEnd = labeledLine.string.firstMatch(of: /\[(candidate|comment)\]/)?.range
+          .lowerBound
+      {
+        let labelString = labeledLine.attributedSubstring(
+          from: NSRange(location: 0, length: labelEnd.utf16Offset(in: labeledLine.string)))
+        let labelWidth = labelString.boundingRect(with: .zero, options: [.usesLineFragmentOrigin])
+          .width
         paragraphStyleCandidate.headIndent = labelWidth  // 设置首行缩进
       }
-      
-  line.addAttribute(.paragraphStyle, value: paragraphStyleCandidate, range: NSRange(location: 0, length: line.length))
-  // 记录候选字在候选文本中的范围，并添加到候选文本
-  let thisRange = NSRange(location: candidateText.length, length: line.length)
-  candidateRanges.append(thisRange)
-  candidateText.append(line)
+
+      line.addAttribute(
+        .paragraphStyle, value: paragraphStyleCandidate,
+        range: NSRange(location: 0, length: line.length))
+      // 记录候选字在候选文本中的范围，并添加到候选文本
+      let thisRange = NSRange(location: candidateText.length, length: line.length)
+      candidateRanges.append(thisRange)
+      candidateText.append(line)
       if DEBUG_LAYOUT_LOGS && i < 2 {
-        print("[Panel.update] 候选#\(i) range=\(thisRange) label='\(label)' candidate='\(candidate)' comment='\(comment)'")
+        print(
+          "[Panel.update] 候选#\(i) range=\(thisRange) label='\(label)' candidate='\(candidate)' comment='\(comment)'"
+        )
       }
     }
 
     // 📝 文本处理完成！现在开始将处理好的富文本显示到界面上
-    
+
     // 🔄 步骤1: 将处理好的富文本设置到文本视图中
     // 在 macOS 的文本系统中，需要同时设置两个属性来确保文本正确显示
     // textContentStorage: 新的文本存储系统（iOS 15/macOS 12 引入）
     // textStorage: 传统的文本存储系统（向后兼容）
-    
+
     // 设置预编辑文本（用户正在输入但还未确认的文字，比如拼音"zhong"）
     view.preeditTextView.textContentStorage?.attributedString = preeditText
     view.preeditTextView.textStorage?.setAttributedString(preeditText)
-    
+
     // 设置候选字文本（输入法提供的备选词汇，比如"中"、"钟"、"终"等）
     view.candidateTextView.textContentStorage?.attributedString = candidateText
     view.candidateTextView.textStorage?.setAttributedString(candidateText)
-    
-  // 🎯 步骤2: 强制触发文本布局计算
+
+    // 🎯 步骤2: 强制触发文本布局计算
     // 当文本内容改变后，系统不会立即重新计算布局，需要手动触发
     // ensureLayout: 确保指定范围内的文本已经完成布局计算
     // documentRange: 整个文档的范围（从开头到结尾）
-    view.preeditTextView.textLayoutManager?.ensureLayout(for: view.preeditTextView.textLayoutManager!.documentRange)
-    view.candidateTextView.textLayoutManager?.ensureLayout(for: view.candidateTextView.textLayoutManager!.documentRange)
-    
+    view.preeditTextView.textLayoutManager?.ensureLayout(
+      for: view.preeditTextView.textLayoutManager!.documentRange)
+    view.candidateTextView.textLayoutManager?.ensureLayout(
+      for: view.candidateTextView.textLayoutManager!.documentRange)
+
     // layoutSubtreeIfNeeded: 如果需要，重新布局整个视图子树
     // 这确保所有子视图的位置和大小都是最新的
     view.preeditTextView.layoutSubtreeIfNeeded()
@@ -513,26 +571,32 @@ final class SquirrelPanel: NSPanel {
       let cdr = view.candidateTextView.textLayoutManager?.documentRange
       let pH = (pdr != nil) ? view.contentRectPreedit(range: pdr!).height : 0
       let cH = (cdr != nil) ? view.contentRect(range: cdr!).height : 0
-      print("[Panel.update] 文档高度 preedit=\(pH) candidate=\(cH) edgeInset=\(theme.edgeInset) linespace=\(theme.linespace) preeditLinespace=\(theme.preeditLinespace) hilitedCornerRadius=\(theme.hilitedCornerRadius)")
-      print("[Panel.update] Insets preedit=\(view.preeditTextView.textContainerInset) candidate=\(view.candidateTextView.textContainerInset) lineFragmentPadding(preedit/cand)=\(view.preeditTextView.textContainer?.lineFragmentPadding ?? -1)/\(view.candidateTextView.textContainer?.lineFragmentPadding ?? -1)")
+      print(
+        "[Panel.update] 文档高度 preedit=\(pH) candidate=\(cH) edgeInset=\(theme.edgeInset) linespace=\(theme.linespace) preeditLinespace=\(theme.preeditLinespace) hilitedCornerRadius=\(theme.hilitedCornerRadius)"
+      )
+      print(
+        "[Panel.update] Insets preedit=\(view.preeditTextView.textContainerInset) candidate=\(view.candidateTextView.textContainerInset) lineFragmentPadding(preedit/cand)=\(view.preeditTextView.textContainer?.lineFragmentPadding ?? -1)/\(view.candidateTextView.textContainer?.lineFragmentPadding ?? -1)"
+      )
     }
-    
+
     // 📐 步骤3: 设置文本布局方向
     // vertical 变量决定是垂直显示还是水平显示
     // .vertical: 文字从上到下排列（传统中文竖排）
     // .horizontal: 文字从左到右排列（现代横排）
     view.preeditTextView.setLayoutOrientation(vertical ? .vertical : .horizontal)
     view.candidateTextView.setLayoutOrientation(vertical ? .vertical : .horizontal)
-    
-  // 🎨 步骤4: 绘制完整的输入法面板视图
+
+    // 🎨 步骤4: 绘制完整的输入法面板视图
     // 这个函数会绘制候选字高亮效果、翻页按钮、边框等所有视觉元素
     // candidateRanges: 每个候选字在文本中的位置范围
     // hilightedIndex: 当前高亮（选中）的候选字索引
     // preeditRange: 预编辑文本的范围
     // highlightedPreeditRange: 预编辑文本中需要高亮的部分
     // canPageUp/canPageDown: 是否可以向上/向下翻页
-    view.drawView(candidateRanges: candidateRanges, hilightedIndex: index, preeditRange: preeditRange, highlightedPreeditRange: highlightedPreeditRange, canPageUp: page > 0, canPageDown: !lastPage)
-    
+    view.drawView(
+      candidateRanges: candidateRanges, hilightedIndex: index, preeditRange: preeditRange,
+      highlightedPreeditRange: highlightedPreeditRange, canPageUp: page > 0, canPageDown: !lastPage)
+
     // 🚀 步骤5: 最终显示面板到屏幕上
     // 若是仅高亮刷新（update=false），禁止任何“自动回顶”副作用，避免悬停导致的跳动
     var suppressedAutoScroll = false
@@ -575,17 +639,17 @@ final class SquirrelPanel: NSPanel {
     let theme = view.currentTheme
     // 根据主题设置决定显示哪种消息
     switch theme.statusMessageType {
-    case .mix:   // 混合模式：优先显示短消息，没有就显示长消息
+    case .mix:  // 混合模式：优先显示短消息，没有就显示长消息
       statusMessage = shortMessage.isEmpty ? longMessage : shortMessage
     case .long:  // 长消息模式：只显示长消息
       statusMessage = longMessage
-    case .short: // 短消息模式：优先显示短消息，没有就显示长消息的首字符
+    case .short:  // 短消息模式：优先显示短消息，没有就显示长消息的首字符
       if !shortMessage.isEmpty {
         statusMessage = shortMessage
       } else if let initial = longMessage.first {
         statusMessage = String(initial)  // 只显示首字符
       } else {
-        statusMessage = ""               // 没有消息就设为空
+        statusMessage = ""  // 没有消息就设为空
       }
     }
   }
@@ -606,23 +670,32 @@ final class SquirrelPanel: NSPanel {
 }
 
 // 私有扩展，包含内部使用的辅助方法
-private extension SquirrelPanel {
+extension SquirrelPanel {
   // 防止滚动导致的高亮刷新递归
   private static var isUpdatingFromScroll = false
 
   // 将当前高亮候选滚动到可见区域（若在下方不可见则贴合到底部；若在上方不可见则贴合到顶部）
   // 对于鼠标悬停导致的高亮，这里通常不会触发滚动，因为命中索引必然处于可见区域。
-  func ensureHighlightedCandidateVisible() {
+  fileprivate func ensureHighlightedCandidateVisible() {
     // 无候选或索引越界不处理
-    guard !view.candidateRanges.isEmpty, index >= 0, index < view.candidateRanges.count else { return }
+    guard !view.candidateRanges.isEmpty, index >= 0, index < view.candidateRanges.count else {
+      return
+    }
     // 将 NSRange 转为 NSTextRange
     guard let tr = view.convert(range: view.candidateRanges[index]) else { return }
 
     // 计算该候选在文档坐标（candidateTextView 坐标系）中的边界框
-    var x0 = CGFloat.infinity, x1 = -CGFloat.infinity, y0 = CGFloat.infinity, y1 = -CGFloat.infinity
-    view.candidateTextView.textLayoutManager?.enumerateTextSegments(in: tr, type: .standard, options: [.rangeNotRequired]) { _, rect, _, _ in
-      x0 = min(x0, rect.minX); x1 = max(x1, rect.maxX)
-      y0 = min(y0, rect.minY); y1 = max(y1, rect.maxY)
+    var x0 = CGFloat.infinity
+    var x1 = -CGFloat.infinity
+    var y0 = CGFloat.infinity
+    var y1 = -CGFloat.infinity
+    view.candidateTextView.textLayoutManager?.enumerateTextSegments(
+      in: tr, type: .standard, options: [.rangeNotRequired]
+    ) { _, rect, _, _ in
+      x0 = min(x0, rect.minX)
+      x1 = max(x1, rect.maxX)
+      y0 = min(y0, rect.minY)
+      y1 = max(y1, rect.maxY)
       return true
     }
     guard x0.isFinite, x1.isFinite, y0.isFinite, y1.isFinite else { return }
@@ -640,7 +713,9 @@ private extension SquirrelPanel {
     // 若已完全可见则不滚动
     let epsilon: CGFloat = 0.5
     if docRect.minY >= visible.minY - epsilon && docRect.maxY <= visible.maxY + epsilon {
-      if DEBUG_LAYOUT_LOGS { print("[ensureVisible] already visible: doc=\(docRect) visible=\(visible)") }
+      if DEBUG_LAYOUT_LOGS {
+        print("[ensureVisible] already visible: doc=\(docRect) visible=\(visible)")
+      }
       return
     }
 
@@ -657,13 +732,15 @@ private extension SquirrelPanel {
     // 设置滚动；为避免触发滚动观察回调造成递归，这里加保护标记
     guard Self.isUpdatingFromScroll == false else { return }
     Self.isUpdatingFromScroll = true
-  if DEBUG_LAYOUT_LOGS { print("[ensureVisible] scroll to y=\(targetY) (doc=\(docRect) visibleBefore=\(visible))") }
-  clipView.scroll(to: NSPoint(x: visible.origin.x, y: targetY))
+    if DEBUG_LAYOUT_LOGS {
+      print("[ensureVisible] scroll to y=\(targetY) (doc=\(docRect) visibleBefore=\(visible))")
+    }
+    clipView.scroll(to: NSPoint(x: visible.origin.x, y: targetY))
     view.candidateScrollView.reflectScrolledClipView(clipView)
     Self.isUpdatingFromScroll = false
   }
 
-  @objc func handleClipViewBoundsChanged(_ notification: Notification) {
+  @objc fileprivate func handleClipViewBoundsChanged(_ notification: Notification) {
     guard !Self.isUpdatingFromScroll else { return }
     // 仅当鼠标在候选区域内且内容发生滚动时，才根据鼠标位置更新高亮
     let pt = mousePosition()
@@ -677,23 +754,29 @@ private extension SquirrelPanel {
     Self.isUpdatingFromScroll = true
     defer { Self.isUpdatingFromScroll = false }
     let (idx, _, _) = view.click(at: pt)
-    if DEBUG_LAYOUT_LOGS { print("[clipViewChanged] hover update idx=\(String(describing: idx)) cursorIndex=\(cursorIndex))") }
+    if DEBUG_LAYOUT_LOGS {
+      print(
+        "[clipViewChanged] hover update idx=\(String(describing: idx)) cursorIndex=\(cursorIndex))")
+    }
     if let idx, idx >= 0 && idx < candidates.count, cursorIndex != idx {
       // 滚动驱动的高亮切换不应重置滚动位置
-      update(preedit: preedit, selRange: selRange, caretPos: caretPos, candidates: candidates, comments: comments, labels: labels, highlighted: idx, page: page, lastPage: lastPage, update: false)
+      update(
+        preedit: preedit, selRange: selRange, caretPos: caretPos, candidates: candidates,
+        comments: comments, labels: labels, highlighted: idx, page: page, lastPage: lastPage,
+        update: false)
     } else {
       view.needsDisplay = true
     }
   }
   // 获取鼠标在面板中的位置
-  func mousePosition() -> NSPoint {
-    var point = NSEvent.mouseLocation      // 获取鼠标在屏幕上的位置
+  fileprivate func mousePosition() -> NSPoint {
+    var point = NSEvent.mouseLocation  // 获取鼠标在屏幕上的位置
     point = self.convertPoint(fromScreen: point)  // 转换为面板坐标系
     return view.convert(point, from: nil)  // 转换为视图坐标系
   }
 
   // 获取当前屏幕信息
-  func currentScreen() {
+  fileprivate func currentScreen() {
     if let screen = NSScreen.main {  // 先尝试获取主屏幕
       screenRect = screen.frame
     }
@@ -705,71 +788,82 @@ private extension SquirrelPanel {
   }
 
   // 计算文本的最大宽度
-  func maxTextWidth() -> CGFloat {
+  fileprivate func maxTextWidth() -> CGFloat {
     let theme = view.currentTheme
     let font: NSFont = theme.font
     let fontScale = font.pointSize / 12  // 字体缩放比例
     // 根据字体大小和显示模式计算文本宽度比例
     let textWidthRatio = min(1, 1 / (vertical ? 4 : 3) + fontScale / 12)
-    let maxWidth = if vertical {
-      // 垂直模式：基于屏幕高度计算
-      screenRect.height * textWidthRatio - theme.edgeInset.height * 2
-    } else {
-      // 水平模式：基于屏幕宽度计算
-      screenRect.width * textWidthRatio - theme.edgeInset.width * 2
-    }
+    let maxWidth =
+      if vertical {
+        // 垂直模式：基于屏幕高度计算
+        screenRect.height * textWidthRatio - theme.edgeInset.height * 2
+      } else {
+        // 水平模式：基于屏幕宽度计算
+        screenRect.width * textWidthRatio - theme.edgeInset.width * 2
+      }
     return maxWidth
   }
 
   // 获取窗口大小，这个窗口将成为 SquirrelView.drawRect 中的 dirtyRect
   // 这是显示面板的核心函数，负责计算位置、大小并显示面板
   // swiftlint:disable:next cyclomatic_complexity
-  func show() {
+  fileprivate func show() {
     currentScreen()  // 更新屏幕信息
     let theme = view.currentTheme
-    
+
     // 如果没有深色主题，使用浅色外观
     if !view.darkTheme.available {
       self.appearance = NSAppearance(named: .aqua)
     }
 
-  // 根据屏幕大小限制文本宽度；高度先给无限以获取自然内容高度
-  let textWidth = maxTextWidth()
-  view.candidateTextView.textContainer?.size = NSSize(width: textWidth, height: CGFloat.greatestFiniteMagnitude)
-  view.preeditTextView.textContainer?.size = NSSize(width: textWidth, height: CGFloat.greatestFiniteMagnitude)
+    // 根据屏幕大小限制文本宽度；高度先给无限以获取自然内容高度
+    let textWidth = maxTextWidth()
+    view.candidateTextView.textContainer?.size = NSSize(
+      width: textWidth, height: CGFloat.greatestFiniteMagnitude)
+    view.preeditTextView.textContainer?.size = NSSize(
+      width: textWidth, height: CGFloat.greatestFiniteMagnitude)
 
     var panelRect = NSRect.zero  // 面板的矩形区域
     // 在垂直模式下，宽度和高度会互换
     var contentRect = view.contentRect
-    
+
     // 如果启用了记忆大小功能，进行特殊处理
-    if theme.memorizeSize && (vertical && position.midY / screenRect.height < 0.5) ||
-        (vertical && position.minX + max(contentRect.width, maxHeight) + theme.edgeInset.width * 2 > screenRect.maxX) {
+    if theme.memorizeSize && (vertical && position.midY / screenRect.height < 0.5)
+      || (vertical
+        && position.minX + max(contentRect.width, maxHeight) + theme.edgeInset.width * 2
+          > screenRect.maxX)
+    {
       if contentRect.width >= maxHeight {
         maxHeight = contentRect.width  // 更新最大高度
       } else {
-  contentRect.size.width = maxHeight  // 使用记忆的高度
-  view.candidateTextView.textContainer?.size = NSSize(width: maxHeight, height: CGFloat.greatestFiniteMagnitude)
+        contentRect.size.width = maxHeight  // 使用记忆的高度
+        view.candidateTextView.textContainer?.size = NSSize(
+          width: maxHeight, height: CGFloat.greatestFiniteMagnitude)
       }
     }
 
-  if vertical {
+    if vertical {
       // 垂直模式的面板大小和位置计算
       let width = contentRect.height + theme.edgeInset.height * 2
       let height = contentRect.width + theme.edgeInset.width * 2
-      panelRect.size = NSSize(width: min(0.95 * screenRect.width, width),
-                              height: min(0.95 * screenRect.height, height) + theme.pagingOffset)
+      panelRect.size = NSSize(
+        width: min(0.95 * screenRect.width, width),
+        height: min(0.95 * screenRect.height, height) + theme.pagingOffset)
 
       // 为了避免打字时上下跳动，在上半屏幕打字时使用下半屏幕，反之亦然
       if position.midY / screenRect.height >= 0.5 {
-        panelRect.origin.y = position.minY - SquirrelTheme.offsetHeight - panelRect.height + theme.pagingOffset
+        panelRect.origin.y =
+          position.minY - SquirrelTheme.offsetHeight - panelRect.height + theme.pagingOffset
       } else {
         panelRect.origin.y = position.maxY + SquirrelTheme.offsetHeight
       }
-      
+
       // 让第一个候选字固定在光标左侧
       panelRect.origin.x = position.minX - panelRect.width - SquirrelTheme.offsetHeight
-      if view.preeditRange.length > 0, let preeditTextRange = view.convertPreedit(range: view.preeditRange) {
+      if view.preeditRange.length > 0,
+        let preeditTextRange = view.convertPreedit(range: view.preeditRange)
+      {
         let preeditRect = view.contentRectPreedit(range: preeditTextRange)
         panelRect.origin.x += preeditRect.height + theme.edgeInset.width
       }
@@ -778,17 +872,17 @@ private extension SquirrelPanel {
       let width = contentRect.width + theme.edgeInset.width * 2
       // 预编辑高度（与 draw 中计算保持一致）
       var preeditDocHeight: CGFloat = 0
-      
+
       // ========== 🔍 调试信息：预编辑范围检查 ==========
       print("🔍 [SquirrelPanel.show] 预编辑范围调试:")
       print("   📝 view.preeditRange: \(view.preeditRange)")
       print("   📏 preeditRange.length: \(view.preeditRange.length)")
       print("   📍 preeditRange.location: \(view.preeditRange.location)")
-      
+
       // 分步骤检查条件
       let lengthCheck = view.preeditRange.length > 0
       print("   ✅ 长度检查 (length > 0): \(lengthCheck)")
-      
+
       if lengthCheck {
         print("   🔄 尝试转换预编辑范围...")
         if let pr = view.convertPreedit(range: view.preeditRange) {
@@ -802,51 +896,58 @@ private extension SquirrelPanel {
       } else {
         print("   ⏭️ 跳过：预编辑范围长度为0")
       }
-      
+
       print("   🏁 最终 preeditDocHeight: \(preeditDocHeight)")
       print("   ----------------------------------------")
-      
+
       // 与 SquirrelView.draw 中 preeditRect.size.height 的组成保持一致：仅使用顶部内边距和半行距，不再叠加圆角补偿
-      let preeditPadding = (view.preeditRange.length > 0)
+      let preeditPadding =
+        (view.preeditRange.length > 0)
         ? (theme.edgeInset.height + theme.preeditLinespace / 2)
         : 0
       // 注意：与 draw() 的 preeditRect.size.height 匹配，不再额外添加额外的底部修正项
-      let preeditFrameHeightNatural = (view.preeditRange.length > 0)
+      let preeditFrameHeightNatural =
+        (view.preeditRange.length > 0)
         ? (preeditDocHeight + preeditPadding)
         : 0
-      let preeditFrameHeightCapped = min(preeditFrameHeightNatural, theme.maxPreeditHeight ?? preeditFrameHeightNatural)
+      let preeditFrameHeightCapped = min(
+        preeditFrameHeightNatural, theme.maxPreeditHeight ?? preeditFrameHeightNatural)
       // 候选区域自然高度（文档+上下内边距）
       var candidateDocHeight: CGFloat = 0
       if let dr = view.candidateTextView.textLayoutManager?.documentRange {
         candidateDocHeight = view.contentRect(range: dr).height
       }
       let candidateNaturalHeight = candidateDocHeight + theme.edgeInset.height
-      let candidateFrameHeightCapped = min(candidateNaturalHeight, theme.maxCandidateHeight ?? candidateNaturalHeight)
+      let candidateFrameHeightCapped = min(
+        candidateNaturalHeight, theme.maxCandidateHeight ?? candidateNaturalHeight)
       let height = preeditFrameHeightCapped + candidateFrameHeightCapped
-      panelRect.size = NSSize(width: min(0.95 * screenRect.width, width),
-                              height: min(0.95 * screenRect.height, height))
+      panelRect.size = NSSize(
+        width: min(0.95 * screenRect.width, width),
+        height: min(0.95 * screenRect.height, height))
       panelRect.size.width += theme.pagingOffset
-      panelRect.origin = NSPoint(x: position.minX - theme.pagingOffset, y: position.minY - SquirrelTheme.offsetHeight - panelRect.height)
+      panelRect.origin = NSPoint(
+        x: position.minX - theme.pagingOffset,
+        y: position.minY - SquirrelTheme.offsetHeight - panelRect.height)
     }
     // 确保面板不会超出屏幕边界
     if panelRect.maxX > screenRect.maxX {
       panelRect.origin.x = screenRect.maxX - panelRect.width  // 右边界调整
     }
     if panelRect.minX < screenRect.minX {
-      panelRect.origin.x = screenRect.minX                    // 左边界调整
+      panelRect.origin.x = screenRect.minX  // 左边界调整
     }
     if panelRect.minY < screenRect.minY {
       if vertical {
-        panelRect.origin.y = screenRect.minY                  // 垂直模式的下边界调整
+        panelRect.origin.y = screenRect.minY  // 垂直模式的下边界调整
       } else {
         panelRect.origin.y = position.maxY + SquirrelTheme.offsetHeight  // 水平模式改为显示在上方
       }
     }
     if panelRect.maxY > screenRect.maxY {
-      panelRect.origin.y = screenRect.maxY - panelRect.height // 上边界调整
+      panelRect.origin.y = screenRect.maxY - panelRect.height  // 上边界调整
     }
     if panelRect.minY < screenRect.minY {
-      panelRect.origin.y = screenRect.minY                    // 最终下边界调整
+      panelRect.origin.y = screenRect.minY  // 最终下边界调整
     }
     self.setFrame(panelRect, display: true)  // 设置面板的最终位置和大小
 
@@ -855,13 +956,13 @@ private extension SquirrelPanel {
       contentView!.boundsRotation = -90  // 将内容视图逆时针旋转90度
       contentView!.setBoundsOrigin(NSPoint(x: 0, y: panelRect.width))
     } else {
-      contentView!.boundsRotation = 0    // 水平模式不旋转
+      contentView!.boundsRotation = 0  // 水平模式不旋转
       contentView!.setBoundsOrigin(.zero)
     }
-  view.preeditTextView.boundsRotation = 0
-  view.preeditTextView.setBoundsOrigin(.zero)
-  view.candidateTextView.boundsRotation = 0
-  view.candidateTextView.setBoundsOrigin(.zero)
+    view.preeditTextView.boundsRotation = 0
+    view.preeditTextView.setBoundsOrigin(.zero)
+    view.candidateTextView.boundsRotation = 0
+    view.candidateTextView.setBoundsOrigin(.zero)
 
     // 设置各个视图的框架
     view.frame = contentView!.bounds
@@ -874,19 +975,27 @@ private extension SquirrelPanel {
     view.preeditScrollView.frame.origin.x += theme.pagingOffset
     view.candidateScrollView.frame.origin.x += theme.pagingOffset
     // 内边距
-  view.preeditTextView.textContainerInset = theme.edgeInset
+    view.preeditTextView.textContainerInset = theme.edgeInset
     // 候选区：设置顶部 inset 为半行距，避免首行被顶部 seam 裁切（与 AppKit 行布局的 half-linespace 保持一致）
-    view.candidateTextView.textContainerInset = NSSize(width: theme.edgeInset.width, height: theme.linespace / 2)
-      if DEBUG_LAYOUT_LOGS {
-        print("[Panel.show] Frames(before): content=\(contentView!.bounds) preeditSV=\(view.preeditScrollView.frame) candSV=\(view.candidateScrollView.frame)")
-        print("[Panel.show] Insets preedit=\(view.preeditTextView.textContainerInset) candidate=\(view.candidateTextView.textContainerInset) pagingOffset=\(theme.pagingOffset)")
-      }
+    view.candidateTextView.textContainerInset = NSSize(
+      width: theme.edgeInset.width, height: theme.linespace / 2)
+    if DEBUG_LAYOUT_LOGS {
+      print(
+        "[Panel.show] Frames(before): content=\(contentView!.bounds) preeditSV=\(view.preeditScrollView.frame) candSV=\(view.candidateScrollView.frame)"
+      )
+      print(
+        "[Panel.show] Insets preedit=\(view.preeditTextView.textContainerInset) candidate=\(view.candidateTextView.textContainerInset) pagingOffset=\(theme.pagingOffset)"
+      )
+    }
 
     // 同步尺寸属性
     for tv in [view.preeditTextView, view.candidateTextView] {
-      tv.frame = (tv === view.preeditTextView) ? view.preeditScrollView.bounds : view.candidateScrollView.bounds
+      tv.frame =
+        (tv === view.preeditTextView)
+        ? view.preeditScrollView.bounds : view.candidateScrollView.bounds
       tv.minSize = .zero
-      tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+      tv.maxSize = NSSize(
+        width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
       tv.autoresizingMask = [.width, .height]
     }
     // 清零滚动偏移（即刻生效，避免旧状态残留）
@@ -899,12 +1008,12 @@ private extension SquirrelPanel {
 
     // 重新计算分区高度并设置滚动条（与 draw 中保持一致）
     var preeditDocHeight: CGFloat = 0
-    
+
     // ========== 🔍 调试信息：第二次预编辑范围检查 ==========
     print("🔍 [SquirrelPanel.show] 第二次预编辑范围调试:")
     print("   📝 view.preeditRange: \(view.preeditRange)")
     print("   📏 preeditRange.length: \(view.preeditRange.length)")
-    
+
     if view.preeditRange.length > 0, let pr = view.convertPreedit(range: view.preeditRange) {
       preeditDocHeight = view.contentRectPreedit(range: pr).height
       print("   ✅ 第二次计算成功，高度: \(preeditDocHeight)")
@@ -912,36 +1021,45 @@ private extension SquirrelPanel {
       print("   ❌ 第二次计算失败或长度为0")
     }
     print("   ----------------------------------------")
-    
+
     // 视觉上的额外上下边距（与 draw 中一致）
     // 同步 draw()：不包含圆角额外补偿，保证上下边界严丝合缝
-    let preeditPadding = (view.preeditRange.length > 0)
+    let preeditPadding =
+      (view.preeditRange.length > 0)
       ? (theme.edgeInset.height + theme.preeditLinespace / 2)
       : 0
-    let preeditFrameHeightNatural = (view.preeditRange.length > 0) ? (preeditDocHeight + preeditPadding) : 0
-    let preeditFrameHeightCapped = min(preeditFrameHeightNatural, theme.maxPreeditHeight ?? preeditFrameHeightNatural)
+    let preeditFrameHeightNatural =
+      (view.preeditRange.length > 0) ? (preeditDocHeight + preeditPadding) : 0
+    let preeditFrameHeightCapped = min(
+      preeditFrameHeightNatural, theme.maxPreeditHeight ?? preeditFrameHeightNatural)
     // 这里计算预编辑区域高度 37
     view.preeditScrollView.frame.size.height = preeditFrameHeightCapped
     // 将预编辑区域置于顶部, 预编辑区域顶部, 高度为0
-    view.preeditScrollView.frame.origin.y = contentView!.bounds.maxY - view.preeditScrollView.frame.size.height
+    view.preeditScrollView.frame.origin.y =
+      contentView!.bounds.maxY - view.preeditScrollView.frame.size.height
     // 候选区域置于下方，填充剩余空间, 候选区域顶部也是0, 高度150
     view.candidateScrollView.frame.origin.y = contentView!.bounds.minY
-    view.candidateScrollView.frame.size.height = max(0, contentView!.bounds.height - view.preeditScrollView.frame.height)
+    view.candidateScrollView.frame.size.height = max(
+      0, contentView!.bounds.height - view.preeditScrollView.frame.height)
 
-  // 重要：在最终确定滚动容器尺寸后，再次将 NSTextView 的 frame 同步为各自滚动容器的最终 bounds。
-  // 注意：不要使用 setBoundsSize 在每次刷新时反复改写坐标系尺寸，否则会触发坐标系缩放累积，
-  // 导致出现“滚动/鼠标滑过后文字越来越大”的现象。这里改为将 bounds 直接重置为 (0,0, frame.size)。
-  view.preeditTextView.frame = view.preeditScrollView.bounds
-  view.preeditTextView.bounds = NSRect(origin: .zero, size: view.preeditTextView.frame.size)
-  view.candidateTextView.frame = view.candidateScrollView.bounds
-  view.candidateTextView.bounds = NSRect(origin: .zero, size: view.candidateTextView.frame.size)
+    // 重要：在最终确定滚动容器尺寸后，再次将 NSTextView 的 frame 同步为各自滚动容器的最终 bounds。
+    // 注意：不要使用 setBoundsSize 在每次刷新时反复改写坐标系尺寸，否则会触发坐标系缩放累积，
+    // 导致出现“滚动/鼠标滑过后文字越来越大”的现象。这里改为将 bounds 直接重置为 (0,0, frame.size)。
+    view.preeditTextView.frame = view.preeditScrollView.bounds
+    view.preeditTextView.bounds = NSRect(origin: .zero, size: view.preeditTextView.frame.size)
+    view.candidateTextView.frame = view.candidateScrollView.bounds
+    view.candidateTextView.bounds = NSRect(origin: .zero, size: view.candidateTextView.frame.size)
     if DEBUG_LAYOUT_LOGS {
-      print("[Panel.show] Resynced textView frames: preeditTV=\(view.preeditTextView.frame) candTV=\(view.candidateTextView.frame)")
-      print("[Panel.show] Resynced textView bounds: preeditTV=\(view.preeditTextView.bounds) candTV=\(view.candidateTextView.bounds)")
+      print(
+        "[Panel.show] Resynced textView frames: preeditTV=\(view.preeditTextView.frame) candTV=\(view.candidateTextView.frame)"
+      )
+      print(
+        "[Panel.show] Resynced textView bounds: preeditTV=\(view.preeditTextView.bounds) candTV=\(view.candidateTextView.bounds)"
+      )
       // ===== 下边缘对齐审计（以 panel.contentView 坐标系为准）=====
       if let cv = self.contentView {
         let tvRectInCV = view.preeditTextView.convert(view.preeditTextView.bounds, to: cv)
-        let svRectInCV = view.preeditScrollView.frame // 已是 contentView 坐标
+        let svRectInCV = view.preeditScrollView.frame  // 已是 contentView 坐标
         let scale = self.backingScaleFactor
         let tvBottom = tvRectInCV.minY
         let svBottom = svRectInCV.minY
@@ -949,38 +1067,56 @@ private extension SquirrelPanel {
         let tvBottomPx = (tvBottom * scale).rounded() / scale
         let svBottomPx = (svBottom * scale).rounded() / scale
         let deltaPx = tvBottomPx - svBottomPx
-        print("[Panel.show][BottomAudit] contentView-coord bottom: tv.minY=\(tvBottom), sv.minY=\(svBottom), delta=\(delta)")
-        print("[Panel.show][BottomAudit] pixel-aligned bottom: tv.minY~=\(tvBottomPx), sv.minY~=\(svBottomPx), delta~=\(deltaPx) (scale=\(scale))")
+        print(
+          "[Panel.show][BottomAudit] contentView-coord bottom: tv.minY=\(tvBottom), sv.minY=\(svBottom), delta=\(delta)"
+        )
+        print(
+          "[Panel.show][BottomAudit] pixel-aligned bottom: tv.minY~=\(tvBottomPx), sv.minY~=\(svBottomPx), delta~=\(deltaPx) (scale=\(scale))"
+        )
       }
     }
 
     // doc heights
     let candidateDocHeight: CGFloat = {
-      if let dr = view.candidateTextView.textLayoutManager?.documentRange { return view.contentRect(range: dr).height } else { return 0 }
+      if let dr = view.candidateTextView.textLayoutManager?.documentRange {
+        return view.contentRect(range: dr).height
+      } else {
+        return 0
+      }
     }()
-  // 显示滚动条（独立判断两区是否溢出）
-  let preeditExceedsCap = preeditFrameHeightNatural > preeditFrameHeightCapped + 0.5
-  // 预编辑区域的可见文本高度 = 实际 frame 高度 - 上部额外 padding（和 draw 完全一致），若候选为空，底部还会有一点额外空间
-  let preeditTopPadding = (view.preeditRange.length > 0) ? (theme.edgeInset.height + theme.preeditLinespace / 2) : 0
-  let preeditBottomExtra = (candidates.isEmpty && view.preeditRange.length > 0) ? max(0, theme.edgeInset.height - theme.preeditLinespace / 2) : 0
-  let preeditVisibleText = max(0, view.preeditScrollView.bounds.height - preeditTopPadding - preeditBottomExtra)
-  let preeditExceedsVisible = preeditDocHeight > preeditVisibleText + 0.5
-  view.preeditScrollView.hasVerticalScroller = (view.preeditScrollView.frame.height > 0) && (preeditExceedsCap || preeditExceedsVisible)
+    // 显示滚动条（独立判断两区是否溢出）
+    let preeditExceedsCap = preeditFrameHeightNatural > preeditFrameHeightCapped + 0.5
+    // 预编辑区域的可见文本高度 = 实际 frame 高度 - 上部额外 padding（和 draw 完全一致），若候选为空，底部还会有一点额外空间
+    let preeditTopPadding =
+      (view.preeditRange.length > 0) ? (theme.edgeInset.height + theme.preeditLinespace / 2) : 0
+    let preeditBottomExtra =
+      (candidates.isEmpty && view.preeditRange.length > 0)
+      ? max(0, theme.edgeInset.height - theme.preeditLinespace / 2) : 0
+    let preeditVisibleText = max(
+      0, view.preeditScrollView.bounds.height - preeditTopPadding - preeditBottomExtra)
+    let preeditExceedsVisible = preeditDocHeight > preeditVisibleText + 0.5
+    view.preeditScrollView.hasVerticalScroller =
+      (view.preeditScrollView.frame.height > 0) && (preeditExceedsCap || preeditExceedsVisible)
 
-  // 候选词的可视区域文本, 区外侧滚轮区域高度 - 主题边缘区域高度  150 - 20 = 130
-  let candidateVisibleText = max(0, view.candidateScrollView.bounds.height - theme.edgeInset.height)
+    // 候选词的可视区域文本, 区外侧滚轮区域高度 - 主题边缘区域高度  150 - 20 = 130
+    let candidateVisibleText = max(
+      0, view.candidateScrollView.bounds.height - theme.edgeInset.height)
     // 实际文档高度 130 , 130
-  let candidateExceedsVisible = candidateDocHeight > candidateVisibleText + 0.5
-  view.candidateScrollView.hasVerticalScroller = candidateExceedsVisible
+    let candidateExceedsVisible = candidateDocHeight > candidateVisibleText + 0.5
+    view.candidateScrollView.hasVerticalScroller = candidateExceedsVisible
 
-  // 最终再次将候选区滚动到顶部以避免初始偏移导致的“首项空白”
-  if shouldAutoScrollToTop {
-    view.candidateScrollView.contentView.scroll(to: NSPoint(x: 0, y: 0))
-    view.candidateScrollView.reflectScrolledClipView(view.candidateScrollView.contentView)
-  }
+    // 最终再次将候选区滚动到顶部以避免初始偏移导致的“首项空白”
+    if shouldAutoScrollToTop {
+      view.candidateScrollView.contentView.scroll(to: NSPoint(x: 0, y: 0))
+      view.candidateScrollView.reflectScrolledClipView(view.candidateScrollView.contentView)
+    }
     if DEBUG_LAYOUT_LOGS {
-      print("[Panel.show] Frames(after): preeditSV=\(view.preeditScrollView.frame) candSV=\(view.candidateScrollView.frame)")
-      print("[Panel.show] Clip offsets: preedit=\(view.preeditScrollView.contentView.bounds.origin) candidate=\(view.candidateScrollView.contentView.bounds.origin)")
+      print(
+        "[Panel.show] Frames(after): preeditSV=\(view.preeditScrollView.frame) candSV=\(view.candidateScrollView.frame)"
+      )
+      print(
+        "[Panel.show] Clip offsets: preedit=\(view.preeditScrollView.contentView.bounds.origin) candidate=\(view.candidateScrollView.contentView.bounds.origin)"
+      )
       if let cdr = view.candidateTextView.textLayoutManager?.documentRange {
         let cRect = view.contentRect(range: cdr)
         print("[Panel.show] Candidate docRect=\(cRect)")
@@ -992,54 +1128,61 @@ private extension SquirrelPanel {
       back.frame = contentView!.bounds
       back.frame.size.width += theme.pagingOffset
       back.appearance = NSApp.effectiveAppearance  // 使用系统当前外观
-      back.isHidden = false                        // 显示背景视图
+      back.isHidden = false  // 显示背景视图
     } else {
-      back.isHidden = true                         // 隐藏背景视图
+      back.isHidden = true  // 隐藏背景视图
     }
-    
+
     alphaValue = theme.alpha  // 设置面板透明度
-    invalidateShadow()        // 刷新阴影
-    orderFront(nil)           // 将面板显示到最前面
+    invalidateShadow()  // 刷新阴影
+    orderFront(nil)  // 将面板显示到最前面
     if DEBUG_LAYOUT_LOGS {
       let maskBBox = view.shape.path?.boundingBox ?? .zero
-      print("[Panel.show] Audit outer: contentBounds=\(contentView!.bounds) back.frame=\(back.frame) view.bounds=\(view.bounds) maskBBox=\(maskBBox)")
+      print(
+        "[Panel.show] Audit outer: contentBounds=\(contentView!.bounds) back.frame=\(back.frame) view.bounds=\(view.bounds) maskBBox=\(maskBBox)"
+      )
     }
-  // 完成一次展示后，取消自动回顶的待执行标记
-  shouldAutoScrollToTop = false
+    // 完成一次展示后，取消自动回顶的待执行标记
+    shouldAutoScrollToTop = false
     // voila! - 大功告成！
   }
 
   // 显示状态消息的函数
-  func show(status message: String) {
+  fileprivate func show(status message: String) {
     let theme = view.currentTheme
     // 创建状态消息的富文本
     let text = NSMutableAttributedString(string: message, attributes: theme.attrs)
-    text.addAttribute(.paragraphStyle, value: theme.paragraphStyle, range: NSRange(location: 0, length: text.length))
-    
+    text.addAttribute(
+      .paragraphStyle, value: theme.paragraphStyle, range: NSRange(location: 0, length: text.length)
+    )
+
     // 设置文本内容和布局
-  // 仅使用候选区域显示状态文本，清空预编辑区域
-  view.preeditTextView.textStorage?.setAttributedString(NSAttributedString())
-  view.preeditTextView.textContentStorage?.attributedString = NSAttributedString()
-  view.candidateTextView.textContentStorage?.attributedString = text
-  view.candidateTextView.textStorage?.setAttributedString(text)
-  view.candidateTextView.setLayoutOrientation(vertical ? .vertical : .horizontal)
-    
+    // 仅使用候选区域显示状态文本，清空预编辑区域
+    view.preeditTextView.textStorage?.setAttributedString(NSAttributedString())
+    view.preeditTextView.textContentStorage?.attributedString = NSAttributedString()
+    view.candidateTextView.textContentStorage?.attributedString = text
+    view.candidateTextView.textStorage?.setAttributedString(text)
+    view.candidateTextView.setLayoutOrientation(vertical ? .vertical : .horizontal)
+
     // 绘制状态消息视图
-    view.drawView(candidateRanges: [NSRange(location: 0, length: text.length)], hilightedIndex: -1,
-                  preeditRange: .empty, highlightedPreeditRange: .empty, canPageUp: false, canPageDown: false)
+    view.drawView(
+      candidateRanges: [NSRange(location: 0, length: text.length)], hilightedIndex: -1,
+      preeditRange: .empty, highlightedPreeditRange: .empty, canPageUp: false, canPageDown: false)
     show()  // 显示面板
 
     // 设置定时器，一定时间后自动隐藏状态消息
     statusTimer?.invalidate()
-    statusTimer = Timer.scheduledTimer(withTimeInterval: SquirrelTheme.showStatusDuration, repeats: false) { _ in
+    statusTimer = Timer.scheduledTimer(
+      withTimeInterval: SquirrelTheme.showStatusDuration, repeats: false
+    ) { _ in
       self.hide()
     }
   }
 
   // 转换字符串范围到 NSRange 的工具函数
-  func convert(range: Range<String.Index>, in string: String) -> NSRange {
+  fileprivate func convert(range: Range<String.Index>, in string: String) -> NSRange {
     let startPos = range.lowerBound.utf16Offset(in: string)  // 获取起始位置的 UTF-16 偏移量
-    let endPos = range.upperBound.utf16Offset(in: string)    // 获取结束位置的 UTF-16 偏移量
+    let endPos = range.upperBound.utf16Offset(in: string)  // 获取结束位置的 UTF-16 偏移量
     return NSRange(location: startPos, length: endPos - startPos)  // 创建 NSRange
   }
 }
