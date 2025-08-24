@@ -627,6 +627,7 @@ final class SquirrelView: NSView {
   // 以 clipView 的底边为“分区缝”（与设备像素对齐），统一作为候选顶部参考
   let clipBottomInSelf = clipRectInSelf.maxY
   let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+
   let seamY = (clipBottomInSelf * scale).rounded() / scale
   // 将 seam 反写到 preeditRect.height，确保后续 inner/outerBox 也使用一致的顶部
   preeditRect.size.height = seamY

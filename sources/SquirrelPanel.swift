@@ -774,7 +774,7 @@ private extension SquirrelPanel {
         panelRect.origin.x += preeditRect.height + theme.edgeInset.width
       }
     } else {
-      // 水平模式的面板大小和位置计算
+      // 水平模式的面板大小和位置计算,contentRect.width =
       let width = contentRect.width + theme.edgeInset.width * 2
       // 预编辑高度（与 draw 中计算保持一致）
       var preeditDocHeight: CGFloat = 0
@@ -820,7 +820,7 @@ private extension SquirrelPanel {
       if let dr = view.candidateTextView.textLayoutManager?.documentRange {
         candidateDocHeight = view.contentRect(range: dr).height
       }
-      let candidateNaturalHeight = candidateDocHeight + theme.edgeInset.height * 2
+      let candidateNaturalHeight = candidateDocHeight + theme.edgeInset.height
       let candidateFrameHeightCapped = min(candidateNaturalHeight, theme.maxCandidateHeight ?? candidateNaturalHeight)
       let height = preeditFrameHeightCapped + candidateFrameHeightCapped
       panelRect.size = NSSize(width: min(0.95 * screenRect.width, width),
@@ -920,10 +920,11 @@ private extension SquirrelPanel {
       : 0
     let preeditFrameHeightNatural = (view.preeditRange.length > 0) ? (preeditDocHeight + preeditPadding) : 0
     let preeditFrameHeightCapped = min(preeditFrameHeightNatural, theme.maxPreeditHeight ?? preeditFrameHeightNatural)
+    // 这里计算预编辑区域高度 37
     view.preeditScrollView.frame.size.height = preeditFrameHeightCapped
-    // 将预编辑区域置于顶部
+    // 将预编辑区域置于顶部, 预编辑区域顶部, 高度为0
     view.preeditScrollView.frame.origin.y = contentView!.bounds.maxY - view.preeditScrollView.frame.size.height
-    // 候选区域置于下方，填充剩余空间
+    // 候选区域置于下方，填充剩余空间, 候选区域顶部也是0, 高度150
     view.candidateScrollView.frame.origin.y = contentView!.bounds.minY
     view.candidateScrollView.frame.size.height = max(0, contentView!.bounds.height - view.preeditScrollView.frame.height)
 
@@ -952,7 +953,9 @@ private extension SquirrelPanel {
   let preeditExceedsVisible = preeditDocHeight > preeditVisibleText + 0.5
   view.preeditScrollView.hasVerticalScroller = (view.preeditScrollView.frame.height > 0) && (preeditExceedsCap || preeditExceedsVisible)
 
-  let candidateVisibleText = max(0, view.candidateScrollView.bounds.height - theme.edgeInset.height * 2)
+  // 候选词的可视区域文本, 区外侧滚轮区域高度 - 主题边缘区域高度  150 - 20 = 130
+  let candidateVisibleText = max(0, view.candidateScrollView.bounds.height - theme.edgeInset.height)
+    // 实际文档高度 130 , 130
   let candidateExceedsVisible = candidateDocHeight > candidateVisibleText + 0.5
   view.candidateScrollView.hasVerticalScroller = candidateExceedsVisible
 
