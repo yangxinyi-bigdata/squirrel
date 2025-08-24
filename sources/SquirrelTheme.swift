@@ -228,6 +228,14 @@ final class SquirrelTheme {
   // 预编辑区最大可见高度（pt）。为 nil 表示不限制，仅受屏幕尺寸限制。
   private(set) var maxPreeditHeight: CGFloat?
 
+  // ===== 候选词差异标记相关配置 =====
+  // 当第一个候选词长度小于该值时，不进行差异比较
+  private(set) var minCompareLength: Int = 5
+  // 差异部分使用的前景色（可选，不配置则仅按粗体控制）
+  private(set) var candidateDiffColor: NSColor?
+  // 是否启用差异部分加粗
+  private(set) var candidateDiffBold: Bool = false
+
   // 定义字体相关的属性
   // 就像是为不同的文本选择不同的"笔迹"
 
@@ -531,6 +539,13 @@ final class SquirrelTheme {
         highlightedCommentTextColor = config.getColor(
           "\(prefix)/hilited_comment_text_color", inSpace: colorSpace)  // 高亮注释文字颜色
 
+        // 读取候选词差异标记配置（配色方案内可覆盖）
+        if let minLen = config.getDouble("\(prefix)/min_compare_length") {
+          minCompareLength ?= Int(minLen)
+        }
+        candidateDiffBold ?= config.getBool("\(prefix)/candidate_diff_bold")
+        candidateDiffColor ?= config.getColor("\(prefix)/candidate_diff_color", inSpace: colorSpace)
+
         // 以下是特定配色方案中的配置项，如果存在的话，会覆盖全局 'style' 部分的同名配置
         // 这就像是"特殊场合的服装"，优先级高于日常服装
 
@@ -571,6 +586,12 @@ final class SquirrelTheme {
       // 就像是"没有找到设计图纸，无法装修"
       available = false
     }
+
+  // ====== 读取候选词差异标记配置（全局键）======
+  // 允许用户把这三个键直接写在 schema 或 squirrel 全局配置中
+  if let minLen = config.getDouble("min_compare_length") { minCompareLength ?= Int(minLen) }
+  candidateDiffBold ?= config.getBool("candidate_diff_bold")
+  candidateDiffColor ?= config.getColor("candidate_diff_color", inSpace: colorSpace)
 
     // 第四阶段：处理字体设置，将字体名称字符串转换为实际可用的字体对象
     // 这个过程就像是"把购物清单变成实际的商品"

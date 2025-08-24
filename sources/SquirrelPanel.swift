@@ -390,7 +390,7 @@ final class SquirrelPanel: NSPanel {
       return  // 提前返回，不继续处理候选字显示
     }
 
-    let theme = view.currentTheme  // 获取当前主题
+  let theme = view.currentTheme  // 获取当前主题
     // 在仅变更高亮（update=false）或滚动驱动的刷新时，保存滚动位置，避免重设文本后被系统复位到顶部
     let preserveOffsets = !update
     let preeditOffsetBefore = view.preeditScrollView.contentView.bounds.origin
@@ -425,6 +425,21 @@ final class SquirrelPanel: NSPanel {
     }
 
     // 处理候选字列表
+    // 计算候选词差异范围映射（键为候选索引，值为其在各自候选文本内的 UTF-16 子串范围）
+    // 简化规则：不区分字符类型，只要“第一个候选长度 > min_compare_length”才比较
+    let firstLen = candidates.first?.count ?? 0
+    let doDiff = firstLen > theme.minCompareLength
+    let candidateDiffRangesMap: [Int: [NSRange]] = doDiff
+      ? computeCandidateDiffs(candidates: candidates, minCompareLength: theme.minCompareLength)
+      : [:]
+    if DEBUG_LAYOUT_LOGS && doDiff {
+      print("[Diff] minCompareLength=\(theme.minCompareLength) firstLen=\(firstLen) candidates.count=\(candidates.count)")
+      for i in 0..<candidates.count {
+        let ranges = candidateDiffRangesMap[i] ?? []
+        let pretty = ranges.map { "(\($0.location),\($0.length))" }.joined(separator: ", ")
+        print("[Diff] #\(i) '\(candidates[i])' -> [\(pretty)]")
+      }
+    }
     var candidateRanges = [NSRange]()  // 存储每个候选字在文本中的范围
 
     // 遍历每个候选字
@@ -478,8 +493,41 @@ final class SquirrelPanel: NSPanel {
       line.mutableString.replaceOccurrences(
         of: "[label]", with: label, range: NSRange(location: 0, length: line.length))
       let labeledLine = line.copy() as! NSAttributedString  // 保存带标签的行，用于后续计算
+      // 在替换候选占位符之前，捕获其在当前字符串中的精确位置
+      var candidateTokenRangeCurrent: NSRange = .init(location: NSNotFound, length: 0)
+      if let r = line.string.range(of: "[candidate]") {
+        candidateTokenRangeCurrent = convert(range: r, in: line.string)
+      } else if let r = line.string.ranges(of: /\[candidate\]/).first {
+        candidateTokenRangeCurrent = convert(range: r, in: line.string)
+      }
       line.mutableString.replaceOccurrences(
         of: "[candidate]", with: candidate, range: NSRange(location: 0, length: line.length))
+      // 插入候选文本后，若启用了差异标记，则在候选正文范围内应用颜色/加粗
+      if (theme.candidateDiffColor != nil || theme.candidateDiffBold),
+         candidateTokenRangeCurrent.location != NSNotFound,
+         let rangesForThis = candidateDiffRangesMap[i]
+      {
+        let candRangeInLine = NSRange(
+          location: candidateTokenRangeCurrent.location,
+          length: candidate.utf16.count
+        )
+        // 选用与该行（是否高亮）一致的基础字体
+        let baseFont = (attrs[.font] as? NSFont) ?? theme.font
+        let boldFont = theme.candidateDiffBold ? boldFont(from: baseFont) : nil
+        for sub in rangesForThis {
+          let absolute = NSRange(
+            location: candRangeInLine.location + sub.location,
+            length: sub.length
+          )
+          var patch: [NSAttributedString.Key: Any] = [:]
+          if let c = theme.candidateDiffColor { patch[.foregroundColor] = c }
+          if let bf = boldFont { patch[.font] = bf }
+          if !patch.isEmpty, absolute.location < line.length, absolute.length > 0 {
+            let safeLen = max(0, min(absolute.length, line.length - absolute.location))
+            if safeLen > 0 { line.addAttributes(patch, range: NSRange(location: absolute.location, length: safeLen)) }
+          }
+        }
+      }
       line.mutableString.replaceOccurrences(
         of: "[comment]", with: comment, range: NSRange(location: 0, length: line.length))
 
@@ -1184,5 +1232,110 @@ extension SquirrelPanel {
     let startPos = range.lowerBound.utf16Offset(in: string)  // 获取起始位置的 UTF-16 偏移量
     let endPos = range.upperBound.utf16Offset(in: string)  // 获取结束位置的 UTF-16 偏移量
     return NSRange(location: startPos, length: endPos - startPos)  // 创建 NSRange
+  }
+
+  // MARK: - Diff helpers (merged)
+  // 计算每个候选词中“与第一候选不同”的片段范围（UTF-16 基准）
+  // 返回字典：key=候选索引，value=NSRange 数组（相对于该候选自身字符串的范围）
+  fileprivate func computeCandidateDiffs(candidates: [String], minCompareLength: Int) -> [Int: [NSRange]] {
+    guard let first = candidates.first else { return [:] }
+    // 条件：第一个候选的汉字长度（按 Unicode 标量数）不足阈值 -> 不比较
+    let firstGraphemeLen = first.count
+    if firstGraphemeLen < minCompareLength { return [:] }
+
+    // 允许参与比较的其他候选应满足：长度 >= 第一候选长度的一半（四舍五入向下）
+    let minLenToCompare = max(1, firstGraphemeLen / 2)
+
+    // 将字符串拆成 Character 数组用于逐字比较，同时保留 UTF-16 偏移换算表
+    let firstChars = Array(first)
+    let firstUtf16Offsets: [Int] = prefixUtf16Offsets(for: first)
+
+    var result: [Int: [NSRange]] = [:]
+    for (idx, cand) in candidates.enumerated() {
+      if idx == 0 { continue }
+      if cand.count < minLenToCompare { continue }
+
+      let candChars = Array(cand)
+      let candUtf16Offsets = prefixUtf16Offsets(for: cand)
+
+      // 找出与 first 不同的所有“连续区间”（以 Character 维度比较）
+      var ranges: [NSRange] = []
+      var runStart: Int? = nil
+      let n = min(firstChars.count, candChars.count)
+      for i in 0..<n {
+        if firstChars[i] != candChars[i] {
+          if runStart == nil { runStart = i }
+        } else if let s = runStart {
+          // 关闭一个区间 [s, i)
+          let loc = candUtf16Offsets[s]
+          let end = candUtf16Offsets[i]
+          ranges.append(NSRange(location: loc, length: end - loc))
+          runStart = nil
+        }
+      }
+      // 若以不同结尾，收尾
+      if let s = runStart {
+        let loc = candUtf16Offsets[s]
+        let end = candUtf16Offsets[min(n, candChars.count)]
+        ranges.append(NSRange(location: loc, length: end - loc))
+      }
+
+      if !ranges.isEmpty { result[idx] = ranges }
+    }
+
+    // 也计算 first 相对其他候选的差异区域（键 0）
+    do {
+      var ranges: [NSRange] = []
+      var runStart: Int? = nil
+      let maxLen = candidates.dropFirst().map { $0.count }.max() ?? 0
+      let n = min(firstChars.count, maxLen)
+      for i in 0..<n {
+        let ref = (i < firstChars.count) ? firstChars[i] : nil
+        var differs = false
+        for cand in candidates.dropFirst().filter({ $0.count >= minLenToCompare }) {
+          let cArr = Array(cand)
+          let cCh = (i < cArr.count) ? cArr[i] : nil
+          if cCh != ref { differs = true; break }
+        }
+        if differs {
+          if runStart == nil { runStart = i }
+        } else if let s = runStart {
+          let loc = firstUtf16Offsets[s]
+          let end = firstUtf16Offsets[i]
+          ranges.append(NSRange(location: loc, length: end - loc))
+          runStart = nil
+        }
+      }
+      if let s = runStart {
+        let loc = firstUtf16Offsets[s]
+        let end = firstUtf16Offsets[min(n, firstChars.count)]
+        ranges.append(NSRange(location: loc, length: end - loc))
+      }
+      if !ranges.isEmpty { result[0] = ranges }
+    }
+
+    return result
+  }
+
+  // 构建 UTF-16 前缀偏移表：prefix[i] = 第 i 个 Character 起始的 UTF-16 偏移；末尾再补整体长度
+  fileprivate func prefixUtf16Offsets(for s: String) -> [Int] {
+    var offsets: [Int] = []
+    offsets.reserveCapacity(s.count + 1)
+    var cur = 0
+    for ch in s {
+      offsets.append(cur)
+      cur += String(ch).utf16.count
+    }
+    offsets.append(cur)
+    return offsets
+  }
+
+  // 生成加粗字体（尽量保持家族与字号）
+  fileprivate func boldFont(from base: NSFont) -> NSFont {
+  let bf = NSFontManager.shared.convert(base, toHaveTrait: .boldFontMask)
+  // 若转换结果不同则直接返回；否则再尝试基于描述符的粗体变体
+  if bf != base { return bf }
+  let desc = base.fontDescriptor.withSymbolicTraits(.bold)
+  return NSFont(descriptor: desc, size: base.pointSize) ?? base
   }
 }
