@@ -646,6 +646,22 @@ final class SquirrelView: NSView {
   let gapClipVsPreeditRect = clipRectInSelf.maxY - preeditRect.maxY
   let gapDocVsSV = svFrame.maxY - docRectInSelf.maxY
   print("🧩 [Preedit Align] gap: sv.maxY-preeditRect.maxY=\(gapSVvsPreeditRect), clipInSelf.maxY-preeditRect.maxY=\(gapClipVsPreeditRect), sv.maxY-doc.maxY=\(gapDocVsSV)")
+  // ====== 下边缘对齐审计（以共同父视图坐标对齐）======
+  if let superv = self.superview {
+    let tvInSuper = self.convert(tv.bounds, from: tv)
+    let svInSuper = superv.convert(svFrame, from: self)
+    let tvBottom = tvInSuper.minY
+    let svBottom = svInSuper.minY
+    let scale2 = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+    let tvBottomPx = (tvBottom * scale2).rounded() / scale2
+    let svBottomPx = (svBottom * scale2).rounded() / scale2
+    print("🧮 [BottomAudit(view)] superview-coord bottom: tv.minY=\(tvBottom), sv.minY=\(svBottom), delta=\(tvBottom - svBottom)")
+    print("🧮 [BottomAudit(view)] pixel-aligned bottom: tv.minY~=\(tvBottomPx), sv.minY~=\(svBottomPx), delta~=\(tvBottomPx - svBottomPx) (scale=\(scale2))")
+  }
+  // ====== 内部文本视图几何转储（辅助定位 _NSText* 内部视图底边不齐）======
+  if DEBUG_LAYOUT_LOGS {
+    debugDumpTextInternals(tag: "draw")
+  }
       
       // 如果预编辑文本有背景颜色，创建背景路径
       if theme.preeditBackgroundColor != nil {
@@ -842,6 +858,11 @@ final class SquirrelView: NSView {
         alpha: 0.3 * theme.hilitedCornerRadius, 
         beta: 1.4 * theme.hilitedCornerRadius
       )?.mutableCopy()
+      if DEBUG_LAYOUT_LOGS, let p = highlightedPreeditPath {
+        let bb = p.boundingBox
+        let seamTop = preeditRect.maxY
+        print("[SquirrelView.draw] preeditHighlighted bbox minY=\(bb.minY) maxY=\(bb.maxY) height=\(bb.height) seamTop(preedit.maxY)=\(seamTop) deltaBottomToSeam=\(seamTop - bb.minY))")
+      }
       
       // ========== 第八步：处理第二组高亮路径（如果存在）==========
       // 当文本跨越多行或有多个分离的高亮区域时，可能存在第二组点
@@ -1207,6 +1228,35 @@ final class SquirrelView: NSView {
 
 // 私有扩展：包含绘图相关的辅助函数
 private extension SquirrelView {
+  // 递归遍历并打印内部文本相关子视图的底边（包含 _NSTextContentView / _NSTextViewportElementView 等私有类），
+  // 统一转换到共同父视图坐标并给出像素对齐后的值，帮助定位你在 Debug View Hierarchy 看到的轻微位移。
+  func debugDumpTextInternals(tag: String) {
+    guard let superv = self.superview else { return }
+    let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+    func px(_ v: CGFloat) -> CGFloat { (v * scale).rounded() / scale }
+    func walk(view: NSView, depth: Int, seamBottom: CGFloat, label: String) {
+      let name = String(describing: type(of: view))
+      // 仅关心文本相关视图：NSTextView、NSClipView、NSScrollView 的 contentView、以及 _NSText*
+      let interesting = name.contains("Text") || name.contains("_NS") || view is NSTextView || view is NSClipView
+      if interesting {
+        let rectInSuper = superv.convert(view.bounds, from: view)
+        let bottom = rectInSuper.minY
+        let bottomPx = px(bottom)
+        let marker = (view === preeditTextView) ? "[preeditTV]" : (view === candidateTextView ? "[candTV]" : "   ")
+        let d = bottom - seamBottom
+        let dPx = bottomPx - px(seamBottom)
+        print(String(repeating: "  ", count: depth) + "🧷 [TextDump:\(tag)] \(label) \(marker) \(name).minY=\(bottom) (~=\(bottomPx)) ΔtoClip=\(d) (px~=\(dPx)) frame=\(view.frame))")
+      }
+      for sub in view.subviews { walk(view: sub, depth: depth + 1, seamBottom: seamBottom, label: label) }
+    }
+    print("===== 🧷 Text internals dump (\(tag)) scale=\(scale) =====")
+    let preeditClipBottom = superv.convert(preeditScrollView.contentView.bounds, from: preeditScrollView.contentView).minY
+    let candClipBottom = superv.convert(candidateScrollView.contentView.bounds, from: candidateScrollView.contentView).minY
+    print("🪡 [Seams] preeditClipBottom=\(preeditClipBottom) (~=\(px(preeditClipBottom))) candClipBottom=\(candClipBottom) (~=\(px(candClipBottom)))")
+    walk(view: preeditTextView, depth: 0, seamBottom: preeditClipBottom, label: "[preedit]")
+    walk(view: candidateTextView, depth: 0, seamBottom: candClipBottom, label: "[candidates]")
+    print("===== 🧷 End dump =====")
+  }
   // 调整后的符号函数，当尺寸较小时减小圆角半径，避免过度圆角
   func sign(_ number: NSPoint) -> NSPoint {
     if number.length >= 2 {
@@ -1553,6 +1603,11 @@ private extension SquirrelView {
     let layer = CAShapeLayer()        // 创建新的形状图层
     layer.path = path                 // 设置图层的路径
     layer.fillRule = .evenOdd         // 设置填充规则为奇偶规则，处理复杂形状的内外判断
+  // 尝试避免 0.5px 抗锯齿缝：将图层内容缩放与屏幕 scale 对齐，并关闭边缘抗锯齿
+  let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+  layer.contentsScale = scale
+  layer.allowsEdgeAntialiasing = false
+  layer.edgeAntialiasingMask = []
     return layer                      // 返回配置好的图层
   }
 

@@ -875,8 +875,8 @@ private extension SquirrelPanel {
     view.candidateScrollView.frame.origin.x += theme.pagingOffset
     // 内边距
   view.preeditTextView.textContainerInset = theme.edgeInset
-  // 候选区：取消垂直内边距，仅保留水平内边距，避免首行与容器顶部的空隙
-  view.candidateTextView.textContainerInset = NSSize(width: theme.edgeInset.width, height: 0)
+    // 候选区：设置顶部 inset 为半行距，避免首行被顶部 seam 裁切（与 AppKit 行布局的 half-linespace 保持一致）
+    view.candidateTextView.textContainerInset = NSSize(width: theme.edgeInset.width, height: theme.linespace / 2)
       if DEBUG_LAYOUT_LOGS {
         print("[Panel.show] Frames(before): content=\(contentView!.bounds) preeditSV=\(view.preeditScrollView.frame) candSV=\(view.candidateScrollView.frame)")
         print("[Panel.show] Insets preedit=\(view.preeditTextView.textContainerInset) candidate=\(view.candidateTextView.textContainerInset) pagingOffset=\(theme.pagingOffset)")
@@ -938,6 +938,20 @@ private extension SquirrelPanel {
     if DEBUG_LAYOUT_LOGS {
       print("[Panel.show] Resynced textView frames: preeditTV=\(view.preeditTextView.frame) candTV=\(view.candidateTextView.frame)")
       print("[Panel.show] Resynced textView bounds: preeditTV=\(view.preeditTextView.bounds) candTV=\(view.candidateTextView.bounds)")
+      // ===== 下边缘对齐审计（以 panel.contentView 坐标系为准）=====
+      if let cv = self.contentView {
+        let tvRectInCV = view.preeditTextView.convert(view.preeditTextView.bounds, to: cv)
+        let svRectInCV = view.preeditScrollView.frame // 已是 contentView 坐标
+        let scale = self.backingScaleFactor
+        let tvBottom = tvRectInCV.minY
+        let svBottom = svRectInCV.minY
+        let delta = tvBottom - svBottom
+        let tvBottomPx = (tvBottom * scale).rounded() / scale
+        let svBottomPx = (svBottom * scale).rounded() / scale
+        let deltaPx = tvBottomPx - svBottomPx
+        print("[Panel.show][BottomAudit] contentView-coord bottom: tv.minY=\(tvBottom), sv.minY=\(svBottom), delta=\(delta)")
+        print("[Panel.show][BottomAudit] pixel-aligned bottom: tv.minY~=\(tvBottomPx), sv.minY~=\(svBottomPx), delta~=\(deltaPx) (scale=\(scale))")
+      }
     }
 
     // doc heights
