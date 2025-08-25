@@ -416,7 +416,7 @@ final class SquirrelPanel: NSPanel {
       preeditText.append(line)
       // 设置预编辑文本的段落样式
       preeditText.addAttribute(
-        .paragraphStyle, value: theme.preeditParagraphStyle,
+        NSAttributedString.Key.paragraphStyle, value: theme.preeditParagraphStyle,
         range: NSRange(location: 0, length: preeditText.length))
     } else {
       // 如果没有预编辑文本，设置范围为空
@@ -424,11 +424,22 @@ final class SquirrelPanel: NSPanel {
       highlightedPreeditRange = .empty
     }
 
-    // 处理候选字列表
+  // 处理候选字列表
+  // 检测是否启用 Markdown 富文本渲染
+    let enableMarkdown = theme.markdownAIResponse
+    let aiStreamState: String? = (enableMarkdown ? inputController?.getProperty("get_ai_stream") : nil)
+    let shouldMarkdown: Bool = {
+      guard enableMarkdown else { return false }
+      guard let s = aiStreamState, s == "start" || s == "stop" else { return false }
+      // 仅当只有一个候选词且包含换行时启用
+      if candidates.count == 1, candidates[0].contains("\n") { return true }
+      return false
+    }()
     // 计算候选词差异范围映射（键为候选索引，值为其在各自候选文本内的 UTF-16 子串范围）
     // 简化规则：不区分字符类型，只要“第一个候选长度 > min_compare_length”才比较
-    let firstLen = candidates.first?.count ?? 0
-    let doDiff = firstLen > theme.minCompareLength
+  let firstLen = candidates.first?.count ?? 0
+  // markdown 渲染时不做差异比较
+  let doDiff = (!shouldMarkdown) && (firstLen > theme.minCompareLength)
     let candidateDiffRangesMap: [Int: [NSRange]] = doDiff
       ? computeCandidateDiffs(candidates: candidates, minCompareLength: theme.minCompareLength)
       : [:]
@@ -443,7 +454,7 @@ final class SquirrelPanel: NSPanel {
     var candidateRanges = [NSRange]()  // 存储每个候选字在文本中的范围
 
     // 遍历每个候选字
-    for i in 0..<candidates.count {
+  for i in 0..<candidates.count {
       // 根据是否是当前选中的候选字，选择不同的样式
       let attrs = i == index ? theme.highlightedAttrs : theme.attrs  // 候选字样式
       let labelAttrs = i == index ? theme.labelHighlightedAttrs : theme.labelAttrs  // 标签样式
@@ -451,7 +462,7 @@ final class SquirrelPanel: NSPanel {
 
       // 生成候选字标签（如 1. 2. 3. 或 A. B. C.）
       let label =
-        if theme.candidateFormat.contains(/\[label\]/) {
+        if theme.candidateFormat.contains("[label]") {
           if labels.count > 1 && i < labels.count {
             labels[i]  // 使用自定义标签
           } else if labels.count == 1 && i < labels.first!.count {
@@ -466,8 +477,9 @@ final class SquirrelPanel: NSPanel {
         }
 
       // 获取候选字和注释文本，并进行标准化处理
-      let candidate = candidates[i].precomposedStringWithCanonicalMapping  // 候选字文本
-      let comment = comments[i].precomposedStringWithCanonicalMapping  // 注释文本
+  let candidateRaw = candidates[i]
+  let candidate = candidateRaw.precomposedStringWithCanonicalMapping  // 候选字文本
+  let comment = comments[i].precomposedStringWithCanonicalMapping  // 注释文本
 
       // 根据候选字格式模板创建富文本行
       let line = NSMutableAttributedString(string: theme.candidateFormat, attributes: labelAttrs)
@@ -479,7 +491,7 @@ final class SquirrelPanel: NSPanel {
         // 如果候选字很短，防止换行
         if candidate.count <= 5 {
           line.addAttribute(
-            .noBreak, value: true,
+            NSAttributedString.Key.noBreak, value: true,
             range: NSRange(location: convertedRange.location + 1, length: convertedRange.length - 1)
           )
         }
@@ -500,10 +512,28 @@ final class SquirrelPanel: NSPanel {
       } else if let r = line.string.ranges(of: /\[candidate\]/).first {
         candidateTokenRangeCurrent = convert(range: r, in: line.string)
       }
-      line.mutableString.replaceOccurrences(
-        of: "[candidate]", with: candidate, range: NSRange(location: 0, length: line.length))
+      // 如果启用 Markdown 且满足条件，尝试将 [candidate] 替换为富文本 Markdown 渲染
+      if shouldMarkdown, candidateTokenRangeCurrent.location != NSNotFound {
+        // 构造候选区段落样式以匹配整体风格
+    let paragraphStyleCandidate = theme.paragraphStyle.mutableCopy() as! NSMutableParagraphStyle
+        if linear {
+          paragraphStyleCandidate.paragraphSpacingBefore -= theme.linespace
+          paragraphStyleCandidate.lineSpacing = theme.linespace
+        }
+  var baseAttrs: [NSAttributedString.Key: Any] = attrs
+  baseAttrs[NSAttributedString.Key.paragraphStyle] = paragraphStyleCandidate
+        let md = Self.renderMarkdown(candidate, base: baseAttrs, theme: theme)
+        // 先用占位占满，再替换对应范围为富文本
+        line.mutableString.replaceOccurrences(
+          of: "[candidate]", with: "\u{fffc}", range: NSRange(location: 0, length: line.length))
+        let replaceRange = NSRange(location: candidateTokenRangeCurrent.location, length: 1)
+        line.replaceCharacters(in: replaceRange, with: md)
+      } else {
+        line.mutableString.replaceOccurrences(
+          of: "[candidate]", with: candidate, range: NSRange(location: 0, length: line.length))
+      }
       // 插入候选文本后，若启用了差异标记，则在候选正文范围内应用颜色/加粗
-      if (theme.candidateDiffColor != nil || theme.candidateDiffBold),
+  if (!shouldMarkdown) && (theme.candidateDiffColor != nil || theme.candidateDiffBold),
          candidateTokenRangeCurrent.location != NSNotFound,
          let rangesForThis = candidateDiffRangesMap[i]
       {
@@ -512,7 +542,7 @@ final class SquirrelPanel: NSPanel {
           length: candidate.utf16.count
         )
         // 选用与该行（是否高亮）一致的基础字体
-        let baseFont = (attrs[.font] as? NSFont) ?? theme.font
+  let baseFont = (attrs[NSAttributedString.Key.font] as? NSFont) ?? theme.font
         let boldFont = theme.candidateDiffBold ? boldFont(from: baseFont) : nil
         for sub in rangesForThis {
           let absolute = NSRange(
@@ -544,9 +574,9 @@ final class SquirrelPanel: NSPanel {
       let str = lineSeparator.mutableCopy() as! NSMutableAttributedString
       if vertical {
         str.addAttribute(
-          .verticalGlyphForm, value: 1, range: NSRange(location: 0, length: str.length))
+          NSAttributedString.Key.verticalGlyphForm, value: 1, range: NSRange(location: 0, length: str.length))
       }
-      view.separatorWidth = str.boundingRect(with: .zero).width  // 计算分隔符宽度
+      view.separatorWidth = str.boundingRect(with: NSSize.zero).width  // 计算分隔符宽度
 
       // 设置段落样式
       // 说明：候选区与预编辑区已分离显示，第一项不应再使用包含“段前间距(来自预编辑)”的 firstParagraphStyle。
@@ -567,13 +597,13 @@ final class SquirrelPanel: NSPanel {
       {
         let labelString = labeledLine.attributedSubstring(
           from: NSRange(location: 0, length: labelEnd.utf16Offset(in: labeledLine.string)))
-        let labelWidth = labelString.boundingRect(with: .zero, options: [.usesLineFragmentOrigin])
+        let labelWidth = labelString.boundingRect(with: NSSize.zero, options: [NSString.DrawingOptions.usesLineFragmentOrigin])
           .width
         paragraphStyleCandidate.headIndent = labelWidth  // 设置首行缩进
       }
 
       line.addAttribute(
-        .paragraphStyle, value: paragraphStyleCandidate,
+        NSAttributedString.Key.paragraphStyle, value: paragraphStyleCandidate,
         range: NSRange(location: 0, length: line.length))
       // 记录候选字在候选文本中的范围，并添加到候选文本
       let thisRange = NSRange(location: candidateText.length, length: line.length)
@@ -1337,5 +1367,107 @@ extension SquirrelPanel {
   if bf != base { return bf }
   let desc = base.fontDescriptor.withSymbolicTraits(.bold)
   return NSFont(descriptor: desc, size: base.pointSize) ?? base
+  }
+
+  // ===== 轻量 Markdown 渲染器 =====
+  // 目标：将多行 Markdown 文本转换为 NSAttributedString
+  // 支持：# 标题、**粗体**、*斜体*、[text](url)、无序/有序列表、> 引用、--- 水平线
+  // 注：此处实现为轻量解析，追求稳定性与零依赖；若需更完整渲染，可后续接入第三方库。
+  fileprivate static func renderMarkdown(_ text: String,
+                                         base: [NSAttributedString.Key: Any],
+                                         theme: SquirrelTheme) -> NSAttributedString {
+    let result = NSMutableAttributedString()
+    let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+    let baseFont = (base[.font] as? NSFont) ?? theme.font
+    let boldFont = NSFontManager.shared.convert(baseFont, toHaveTrait: .boldFontMask)
+    let italicFont: NSFont = {
+      let f = NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask)
+      return (f == baseFont) ? baseFont : f
+    }()
+    let linkColor = NSColor.linkColor
+    let para = (base[.paragraphStyle] as? NSParagraphStyle) ?? theme.paragraphStyle
+
+    func appendParagraph(_ attr: NSAttributedString) {
+      result.append(attr)
+      result.append(NSAttributedString(string: "\n"))
+    }
+
+    func nsRange(_ r: Range<String.Index>, in s: String) -> NSRange {
+      let start = r.lowerBound.utf16Offset(in: s)
+      let end = r.upperBound.utf16Offset(in: s)
+      return NSRange(location: start, length: end - start)
+    }
+
+    for rawLine in lines {
+      var line = String(rawLine)
+      // 水平线
+      if line.trimmingCharacters(in: .whitespaces) == "---" {
+        let rule = NSAttributedString(string: "\u{2015}\u{2015}\u{2015}", attributes: base)
+        appendParagraph(rule)
+        continue
+      }
+
+      var attrs = base
+      // 标题：#, ##, ###
+      if let m = try? /^(#{1,3})\s+(.*)$/.firstMatch(in: line) {
+        let level = m.output.1.count
+        line = String(m.output.2)
+        let scale: CGFloat = (level == 1 ? 1.35 : (level == 2 ? 1.22 : 1.12))
+        let f = baseFont.withSize(baseFont.pointSize * scale)
+        attrs[.font] = f
+      }
+      // 引用
+      if let m = try? /^>\s?(.*)$/.firstMatch(in: line) {
+        line = String(m.output.1)
+        let quotePara = (para.mutableCopy() as! NSMutableParagraphStyle)
+        quotePara.headIndent += 12
+        quotePara.firstLineHeadIndent += 12
+        attrs[.paragraphStyle] = quotePara
+        attrs[.foregroundColor] = (base[.foregroundColor] as? NSColor)?.withAlphaComponent(0.9)
+      }
+      // 列表（无序/有序）
+      if let m = try? /^\s*([\-*+]\s+|\d+\.\s+)(.*)$/.firstMatch(in: line) {
+        line = "• " + String(m.output.2)
+      }
+
+      // 内联处理：链接、粗体、斜体
+      let paraStr = NSMutableAttributedString(string: line, attributes: attrs)
+      // 链接 [text](url)
+      while let m = try? /\[(.+?)\]\((https?:\/\/[^\s)]+)\)/.firstMatch(in: paraStr.string) {
+        let fullR = nsRange(m.range, in: paraStr.string)
+        let linkText = String(m.output.1)
+        let urlText = String(m.output.2)
+        paraStr.replaceCharacters(in: fullR, with: linkText)
+        let lr = NSRange(location: fullR.location, length: (linkText as NSString).length)
+        if let url = URL(string: urlText) {
+          paraStr.addAttributes([
+            .link: url,
+            .foregroundColor: linkColor
+          ], range: lr)
+        }
+      }
+      // 粗体 **text**
+      while let m = try? /\*\*(.+?)\*\*/.firstMatch(in: paraStr.string) {
+        let fullR = nsRange(m.range, in: paraStr.string)
+        let content = String(m.output.1)
+        paraStr.replaceCharacters(in: fullR, with: content)
+        let r = NSRange(location: fullR.location, length: (content as NSString).length)
+        paraStr.addAttributes([.font: boldFont], range: r)
+      }
+      // 斜体 *text*
+      while let m = try? /\*(.+?)\*/.firstMatch(in: paraStr.string) {
+        let fullR = nsRange(m.range, in: paraStr.string)
+        let content = String(m.output.1)
+        paraStr.replaceCharacters(in: fullR, with: content)
+        let r = NSRange(location: fullR.location, length: (content as NSString).length)
+        paraStr.addAttributes([.font: italicFont], range: r)
+      }
+
+      appendParagraph(paraStr)
+    }
+
+    // 去除末尾多余换行
+    if result.string.hasSuffix("\n") { result.deleteCharacters(in: NSRange(location: result.length - 1, length: 1)) }
+    return result
   }
 }

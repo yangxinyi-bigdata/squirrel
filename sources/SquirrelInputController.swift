@@ -439,6 +439,18 @@ final class SquirrelInputController: IMKInputController {
     // 销毁输入法会话
     destroySession()
   }
+
+  // 读取当前会话的 Rime 属性字符串（如 get_ai_stream）
+  // 返回 nil 表示属性不存在或读取失败
+  func getProperty(_ name: String, max: Int = 256) -> String? {
+    guard session != 0 else { return nil }
+    var buf = Array<CChar>(repeating: 0, count: max)
+    let ok = rimeAPI.get_property(session, name, &buf, buf.count)
+    if ok, buf[0] != 0 {
+      return String(cString: buf)
+    }
+    return nil
+  }
 }
 
 // 私有扩展，包含内部使用的方法

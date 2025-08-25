@@ -99,7 +99,8 @@ preset_color_schemes:
     max_candidate_height: 400
     min_compare_length: 10  # 最小比较候选词长度, 也就是超过5个字, 才需要进行比较
     candidate_diff_color: 0x129CF3 # 橙色（注意：此主题解析为 0xBBGGRR 或 0xAABBGGRR）
-    candidate_diff_bold: true # 是否启用候选词差异色
+    candidate_diff_bold: true # 是否启用候选词差异
+    markdown_ai_response: true          # 启用AI内容Markdown渲染
 
     
   mint_dark_blue:

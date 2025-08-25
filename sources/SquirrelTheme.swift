@@ -236,6 +236,10 @@ final class SquirrelTheme {
   // 是否启用差异部分加粗
   private(set) var candidateDiffBold: Bool = false
 
+  // ==== AI Markdown 渲染开关 ====
+  // 当为 true 时，且满足上下文条件，将把单一含多行的候选词按 Markdown 渲染为富文本
+  private(set) var markdownAIResponse: Bool = false
+
   // 定义字体相关的属性
   // 就像是为不同的文本选择不同的"笔迹"
 
@@ -546,6 +550,9 @@ final class SquirrelTheme {
         candidateDiffBold ?= config.getBool("\(prefix)/candidate_diff_bold")
         candidateDiffColor ?= config.getColor("\(prefix)/candidate_diff_color", inSpace: colorSpace)
 
+  // 读取 Markdown 渲染开关（配色方案内）
+  markdownAIResponse ?= config.getBool("\(prefix)/markdown_ai_response")
+
         // 以下是特定配色方案中的配置项，如果存在的话，会覆盖全局 'style' 部分的同名配置
         // 这就像是"特殊场合的服装"，优先级高于日常服装
 
@@ -592,6 +599,11 @@ final class SquirrelTheme {
   if let minLen = config.getDouble("min_compare_length") { minCompareLength ?= Int(minLen) }
   candidateDiffBold ?= config.getBool("candidate_diff_bold")
   candidateDiffColor ?= config.getColor("candidate_diff_color", inSpace: colorSpace)
+
+  // 读取 Markdown 渲染开关（全局/样式命名空间）
+  // 优先顺序：配色方案内 -> style/mint_light_blue -> style/markdown_ai_response
+  markdownAIResponse ?= config.getBool("style/mint_light_blue/markdown_ai_response")
+  markdownAIResponse ?= config.getBool("style/markdown_ai_response")
 
     // 第四阶段：处理字体设置，将字体名称字符串转换为实际可用的字体对象
     // 这个过程就像是"把购物清单变成实际的商品"
