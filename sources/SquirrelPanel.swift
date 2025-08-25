@@ -1183,9 +1183,13 @@ extension SquirrelPanel {
       ? max(0, theme.edgeInset.height - theme.preeditLinespace / 2) : 0
     let preeditVisibleText = max(
       0, view.preeditScrollView.bounds.height - preeditTopPadding - preeditBottomExtra)
-    let preeditExceedsVisible = preeditDocHeight > preeditVisibleText + 0.5
+    // 无候选词时，不扣除“底部额外空间”来计算可见文本高度，避免单行内容误判为超出
+    let preeditVisibleTextNoBottom = max(
+      0, view.preeditScrollView.bounds.height - preeditTopPadding)
+    let preeditExceedsVisibleBase = preeditDocHeight
+      > ((candidates.isEmpty ? preeditVisibleTextNoBottom : preeditVisibleText) + 0.5)
     view.preeditScrollView.hasVerticalScroller =
-      (view.preeditScrollView.frame.height > 0) && (preeditExceedsCap || preeditExceedsVisible)
+      (view.preeditScrollView.frame.height > 0) && (preeditExceedsCap || preeditExceedsVisibleBase)
 
     // 候选词的可视区域文本, 区外侧滚轮区域高度 - 主题边缘区域高度  150 - 20 = 130
     let candidateVisibleText = max(
